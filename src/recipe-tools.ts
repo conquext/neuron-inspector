@@ -6,7 +6,34 @@
 import type { ToolDef } from "./tools.js";
 import * as recipes from "./recipes.js";
 
+/** Track the active recipe so neuron_recipe_complete knows what to log. */
+let activeRecipe: { slug: string; startedAt: string; variables: Record<string, unknown> } | null = null;
+
 export const RECIPE_TOOLS: ToolDef[] = [
+  {
+    name: "neuron_recipe_run",
+    description: "Start a recipe run. Loads the recipe's agent.md with variables interpolated, its learnings, and resolved variables (auto-filled from profile). Returns everything the AI needs to execute the recipe. Call neuron_recipe_complete when done to auto-log the outcome to memory.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        slug: { type: "string", description: "Recipe slug (e.g. 'web-researcher', 'qa-engineer')" },
+        variables: { type: "object", description: "Variable overrides — keys matching recipe.yaml variable names. Merged on top of profile defaults." },
+      },
+      required: ["slug"],
+    },
+  },
+  {
+    name: "neuron_recipe_complete",
+    description: "End a recipe run started with neuron_recipe_run. Logs the outcome to the recipe's memory automatically. Provide the outcome data matching the recipe's Reflect section. If the recipe has 5+ memory entries, also return the learnings so the evolve phase can update strategy.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        outcome: { type: "object", description: "Run outcome — structure varies per recipe, see the Reflect section in agent.md" },
+        updated_learnings: { type: "string", description: "If you ran the evolve phase, provide the updated learnings.md content here to persist it" },
+      },
+      required: ["outcome"],
+    },
+  },
   {
     name: "neuron_recipe_list",
     description: "List all available recipes (bundled + user-installed). Shows name, description, whether it has accumulated learnings, and run count.",
@@ -134,6 +161,81 @@ export async function handleRecipeTool(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   switch (name) {
+    case "neuron_recipe_run": {
+      const slug = args.slug as string;
+      const recipe = recipes.getRecipe(slug);
+      if (!recipe) throw new Error(`Recipe "${slug}" not found.`);
+
+      // Merge user-provided variables on top of profile-resolved defaults
+      const userVars = (args.variables as Record<string, unknown>) ?? {};
+      const resolved = { ...recipe.resolved_variables, ...userVars };
+
+      // Interpolate variables into agent.md
+      let instructions = recipe.agent_md;
+      for (const [key, value] of Object.entries(resolved)) {
+        instructions = instructions.replaceAll(`{{${key}}}`, String(value ?? ""));
+      }
+
+      // Track active run
+      activeRecipe = { slug, startedAt: new Date().toISOString(), variables: resolved };
+
+      // Get memory stats for evolve hint
+      const memory = recipes.getMemory(slug, 1);
+      const shouldEvolve = memory.total >= 5;
+
+      return {
+        recipe: recipe.meta.name,
+        slug,
+        instructions,
+        learnings: recipe.learnings,
+        resolved_variables: resolved,
+        unfilled_variables: Object.entries(recipe.variables)
+          .filter(([key]) => !(key in resolved) || resolved[key] === undefined || resolved[key] === "")
+          .map(([key, def]) => ({ key, ...(def as Record<string, unknown>) })),
+        memory_count: memory.total,
+        evolve_hint: shouldEvolve
+          ? `This recipe has ${memory.total} past runs. After completing this run, read memory with neuron_recipe_memory, analyze patterns, and update learnings with neuron_recipe_complete (include updated_learnings).`
+          : null,
+        pipes: recipe.recipe_yaml.includes("inputs:")
+          ? "This recipe has input pipes — check resolved_variables for data from other recipes."
+          : null,
+      };
+    }
+
+    case "neuron_recipe_complete": {
+      if (!activeRecipe) throw new Error("No active recipe run. Call neuron_recipe_run first.");
+
+      const { slug, startedAt, variables } = activeRecipe;
+      const outcome = (args.outcome as Record<string, unknown>) ?? {};
+
+      // Auto-log memory
+      const entry = {
+        started_at: startedAt,
+        completed_at: new Date().toISOString(),
+        variables_used: variables,
+        ...outcome,
+      };
+      const memResult = recipes.logMemory(slug, entry);
+
+      // Persist updated learnings if provided (evolve phase)
+      const updatedLearnings = args.updated_learnings as string | undefined;
+      if (updatedLearnings) {
+        recipes.updateRecipe(slug, { learnings: updatedLearnings });
+      }
+
+      // Get updated memory count
+      const memory = recipes.getMemory(slug, 1);
+
+      activeRecipe = null;
+
+      return {
+        logged_to: memResult.path,
+        total_runs: memory.total,
+        learnings_updated: !!updatedLearnings,
+        next_evolve_at: memory.total < 5 ? `${5 - memory.total} more runs until first evolve` : "Ready to evolve — review memory and update learnings on next run",
+      };
+    }
+
     case "neuron_recipe_list":
       return recipes.listRecipes();
 

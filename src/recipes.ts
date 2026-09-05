@@ -7,12 +7,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { execSync } from "node:child_process";
+import YAML from "yaml";
 
 // ── Paths ───────────────────────────────────────────────────
 
 /** Bundled recipes shipped with the package */
 function bundledRecipesDir(): string {
-  // recipes/ sits next to src/ in the package root
   const srcDir = path.dirname(new URL(import.meta.url).pathname);
   return path.join(srcDir, "..", "recipes");
 }
@@ -39,21 +39,13 @@ function readText(filePath: string): string | null {
   }
 }
 
-function readYamlish(text: string): Record<string, unknown> {
-  // Minimal YAML-like parser for recipe.yaml — handles flat and simple nested keys.
-  // Not a full YAML parser; good enough for structured recipe metadata.
-  const result: Record<string, unknown> = {};
-  for (const line of text.split("\n")) {
-    const match = line.match(/^(\w[\w_-]*):\s*(.+)$/);
-    if (match) {
-      const val = match[2].trim();
-      if (val === "true") result[match[1]] = true;
-      else if (val === "false") result[match[1]] = false;
-      else if (/^\d+$/.test(val)) result[match[1]] = parseInt(val, 10);
-      else result[match[1]] = val.replace(/^["']|["']$/g, "");
-    }
+function parseYaml(text: string): Record<string, unknown> {
+  try {
+    const parsed = YAML.parse(text);
+    return typeof parsed === "object" && parsed !== null ? parsed : {};
+  } catch {
+    return {};
   }
-  return result;
 }
 
 interface RecipeSummary {
@@ -75,12 +67,10 @@ function parseRecipe(dir: string, location: "bundled" | "user"): RecipeSummary |
   const yamlText = readText(yamlPath);
   if (!yamlText) return null;
 
-  const meta = readYamlish(yamlText);
+  const meta = parseYaml(yamlText);
 
-  // Parse tags from YAML list format
-  const tagsMatch = yamlText.match(/^tags:\s*\[([^\]]*)\]/m);
-  const tags = tagsMatch
-    ? tagsMatch[1].split(",").map((t) => t.trim().replace(/^["']|["']$/g, "")).filter(Boolean)
+  const tags = Array.isArray(meta.tags)
+    ? (meta.tags as unknown[]).map(String)
     : [];
 
   const memoryDir = path.join(dir, "memory");
@@ -105,12 +95,35 @@ function parseRecipe(dir: string, location: "bundled" | "user"): RecipeSummary |
   };
 }
 
-// ── Public API (called by MCP tool handlers) ────────────────
+// ── Resolve recipe directory ────────────────────────────────
+
+function resolveRecipeDir(slug: string): string | null {
+  const userDir = path.join(userRecipesDir(), slug);
+  if (fs.existsSync(userDir)) return userDir;
+  const bundledDir = path.join(bundledRecipesDir(), slug);
+  if (fs.existsSync(bundledDir)) return bundledDir;
+  return null;
+}
+
+/** Fork a bundled recipe to user dir for writing, return the user dir path. */
+function ensureWritable(slug: string): string {
+  const userDir = path.join(userRecipesDir(), slug);
+  if (fs.existsSync(userDir)) return userDir;
+
+  const bundledDir = path.join(bundledRecipesDir(), slug);
+  if (fs.existsSync(bundledDir)) {
+    fs.cpSync(bundledDir, userDir, { recursive: true });
+    return userDir;
+  }
+
+  throw new Error(`Recipe "${slug}" not found.`);
+}
+
+// ── Public API ──────────────────────────────────────────────
 
 export function listRecipes(): RecipeSummary[] {
   const recipes: RecipeSummary[] = [];
 
-  // Bundled
   const bundled = bundledRecipesDir();
   if (fs.existsSync(bundled)) {
     for (const entry of fs.readdirSync(bundled, { withFileTypes: true })) {
@@ -120,7 +133,6 @@ export function listRecipes(): RecipeSummary[] {
     }
   }
 
-  // User
   const user = userRecipesDir();
   for (const entry of fs.readdirSync(user, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
@@ -137,14 +149,13 @@ export function getRecipe(slug: string): {
   recipe_yaml: string;
   learnings: string | null;
   variables: Record<string, unknown>;
+  profile: Record<string, unknown> | null;
+  resolved_variables: Record<string, unknown>;
 } | null {
-  // Check user dir first (overrides bundled)
-  const userDir = path.join(userRecipesDir(), slug);
-  const bundledDir = path.join(bundledRecipesDir(), slug);
-  const dir = fs.existsSync(userDir) ? userDir : fs.existsSync(bundledDir) ? bundledDir : null;
+  const dir = resolveRecipeDir(slug);
   if (!dir) return null;
 
-  const location = dir === userDir ? "user" : "bundled";
+  const location = dir.startsWith(userRecipesDir()) ? "user" : "bundled";
   const meta = parseRecipe(dir, location as "bundled" | "user");
   if (!meta) return null;
 
@@ -152,27 +163,30 @@ export function getRecipe(slug: string): {
   const recipeYaml = readText(path.join(dir, "recipe.yaml")) ?? "";
   const learnings = readText(path.join(dir, "learnings.md"));
 
-  // Parse variables from recipe.yaml (simplified)
-  const variables: Record<string, unknown> = {};
-  const varSection = recipeYaml.match(/^variables:\n((?:[\s].*\n)*)/m);
-  if (varSection) {
-    const varLines = varSection[1].split("\n");
-    let currentVar = "";
-    for (const line of varLines) {
-      const nameMatch = line.match(/^\s{2}(\w[\w_-]*):/);
-      if (nameMatch) {
-        currentVar = nameMatch[1];
-        variables[currentVar] = {};
-      } else if (currentVar) {
-        const propMatch = line.match(/^\s{4}(\w+):\s*(.+)/);
-        if (propMatch) {
-          (variables[currentVar] as Record<string, string>)[propMatch[1]] = propMatch[2].trim().replace(/^["']|["']$/g, "");
-        }
-      }
+  const parsed = parseYaml(recipeYaml);
+  const variables = (parsed.variables as Record<string, unknown>) ?? {};
+
+  // Merge profile into variables to pre-fill matching keys
+  const profile = getProfile();
+  const resolved: Record<string, unknown> = {};
+  for (const [varName, varDef] of Object.entries(variables)) {
+    const def = varDef as Record<string, unknown> | null;
+    if (profile && varName in profile) {
+      resolved[varName] = profile[varName];
+    } else if (def && "default" in def) {
+      resolved[varName] = def.default;
     }
   }
 
-  return { meta, agent_md: agentMd, recipe_yaml: recipeYaml, learnings, variables };
+  return {
+    meta,
+    agent_md: agentMd,
+    recipe_yaml: recipeYaml,
+    learnings,
+    variables,
+    profile,
+    resolved_variables: resolved,
+  };
 }
 
 export function createRecipe(
@@ -199,19 +213,7 @@ export function updateRecipe(
   slug: string,
   updates: { agent_md?: string; learnings?: string; recipe_yaml?: string },
 ): { path: string } {
-  const userDir = path.join(userRecipesDir(), slug);
-  const bundledDir = path.join(bundledRecipesDir(), slug);
-
-  let dir: string;
-  if (fs.existsSync(userDir)) {
-    dir = userDir;
-  } else if (fs.existsSync(bundledDir)) {
-    // Fork bundled recipe to user dir before editing
-    fs.cpSync(bundledDir, userDir, { recursive: true });
-    dir = userDir;
-  } else {
-    throw new Error(`Recipe "${slug}" not found.`);
-  }
+  const dir = ensureWritable(slug);
 
   if (updates.agent_md) fs.writeFileSync(path.join(dir, "agent.md"), updates.agent_md);
   if (updates.learnings) fs.writeFileSync(path.join(dir, "learnings.md"), updates.learnings);
@@ -221,20 +223,7 @@ export function updateRecipe(
 }
 
 export function logMemory(slug: string, entry: Record<string, unknown>): { path: string } {
-  const userDir = path.join(userRecipesDir(), slug);
-  const bundledDir = path.join(bundledRecipesDir(), slug);
-
-  // Memory always goes to user dir
-  let dir: string;
-  if (fs.existsSync(userDir)) {
-    dir = userDir;
-  } else if (fs.existsSync(bundledDir)) {
-    // Fork to user dir
-    fs.cpSync(bundledDir, userDir, { recursive: true });
-    dir = userDir;
-  } else {
-    throw new Error(`Recipe "${slug}" not found.`);
-  }
+  const dir = ensureWritable(slug);
 
   const memDir = path.join(dir, "memory");
   if (!fs.existsSync(memDir)) fs.mkdirSync(memDir, { recursive: true });
@@ -245,28 +234,14 @@ export function logMemory(slug: string, entry: Record<string, unknown>): { path:
   const filename = `${ts}-run-${String(count).padStart(3, "0")}.yaml`;
   const filepath = path.join(memDir, filename);
 
-  // Simple YAML-like serialization
-  const lines: string[] = [`date: ${now.toISOString()}`];
-  for (const [key, value] of Object.entries(entry)) {
-    if (key === "date") continue;
-    if (typeof value === "object" && value !== null) {
-      lines.push(`${key}:`);
-      for (const [k2, v2] of Object.entries(value as Record<string, unknown>)) {
-        lines.push(`  ${k2}: ${JSON.stringify(v2)}`);
-      }
-    } else {
-      lines.push(`${key}: ${JSON.stringify(value)}`);
-    }
-  }
-  fs.writeFileSync(filepath, lines.join("\n") + "\n");
+  const data = { date: now.toISOString(), ...entry };
+  fs.writeFileSync(filepath, YAML.stringify(data));
 
   return { path: filepath };
 }
 
 export function getMemory(slug: string, limit = 20): { entries: Record<string, unknown>[]; total: number } {
-  const userDir = path.join(userRecipesDir(), slug);
-  const bundledDir = path.join(bundledRecipesDir(), slug);
-  const dir = fs.existsSync(userDir) ? userDir : fs.existsSync(bundledDir) ? bundledDir : null;
+  const dir = resolveRecipeDir(slug);
   if (!dir) throw new Error(`Recipe "${slug}" not found.`);
 
   const memDir = path.join(dir, "memory");
@@ -281,7 +256,7 @@ export function getMemory(slug: string, limit = 20): { entries: Record<string, u
   for (const f of files.slice(0, limit)) {
     const text = readText(path.join(memDir, f));
     if (text) {
-      entries.push({ _file: f, ...readYamlish(text) });
+      entries.push({ _file: f, ...parseYaml(text) });
     }
   }
 
@@ -292,7 +267,6 @@ export function importRecipe(source: string): { slug: string; path: string } {
   let srcDir: string;
 
   if (source.startsWith("github:")) {
-    // github:user/repo or github:user/repo/path
     const parts = source.slice(7).split("/");
     const repo = `${parts[0]}/${parts[1]}`;
     const subpath = parts.slice(2).join("/");
@@ -304,30 +278,29 @@ export function importRecipe(source: string): { slug: string; path: string } {
     }
     srcDir = subpath ? path.join(tmpDir, subpath) : tmpDir;
 
-    // If the cloned repo IS a recipe (has recipe.yaml at root), use it directly
     if (!fs.existsSync(path.join(srcDir, "recipe.yaml"))) {
-      // Check if it's a repo with recipes/ subdir
       const recipesSubdir = path.join(srcDir, "recipes");
       if (fs.existsSync(recipesSubdir)) {
-        // Import all recipes from the repo
         const imported: string[] = [];
         for (const entry of fs.readdirSync(recipesSubdir, { withFileTypes: true })) {
           if (!entry.isDirectory()) continue;
           if (!fs.existsSync(path.join(recipesSubdir, entry.name, "recipe.yaml"))) continue;
           const destDir = path.join(userRecipesDir(), entry.name);
-          if (fs.existsSync(destDir)) continue; // skip existing
+          if (fs.existsSync(destDir)) continue;
           fs.cpSync(path.join(recipesSubdir, entry.name), destDir, { recursive: true });
+          // Strip memory from imports
+          const mem = path.join(destDir, "memory");
+          if (fs.existsSync(mem)) fs.rmSync(mem, { recursive: true, force: true });
           imported.push(entry.name);
         }
-        // Clean up
         fs.rmSync(tmpDir, { recursive: true, force: true });
-        if (imported.length === 0) throw new Error("No recipes found in repository");
+        if (imported.length === 0) throw new Error("No new recipes found in repository");
         return { slug: imported.join(", "), path: userRecipesDir() };
       }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
       throw new Error("No recipe.yaml found in repository root or recipes/ subdirectory");
     }
   } else {
-    // Local path
     srcDir = path.resolve(source);
   }
 
@@ -336,8 +309,11 @@ export function importRecipe(source: string): { slug: string; path: string } {
   }
 
   const yamlText = readText(path.join(srcDir, "recipe.yaml"));
-  const meta = yamlText ? readYamlish(yamlText) : {};
-  const slug = String(meta.name || path.basename(srcDir)).toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+  const meta = yamlText ? parseYaml(yamlText) : {};
+  const slug = String(meta.name || path.basename(srcDir))
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9-]/g, "");
 
   const destDir = path.join(userRecipesDir(), slug);
   if (fs.existsSync(destDir)) {
@@ -345,7 +321,6 @@ export function importRecipe(source: string): { slug: string; path: string } {
   }
 
   fs.cpSync(srcDir, destDir, { recursive: true });
-  // Remove memory from imported recipe (local-only)
   const importedMemory = path.join(destDir, "memory");
   if (fs.existsSync(importedMemory)) {
     fs.rmSync(importedMemory, { recursive: true, force: true });
@@ -380,14 +355,16 @@ export function deleteRecipe(slug: string): void {
 export function getProfile(): Record<string, unknown> | null {
   const text = readText(profilePath());
   if (!text) return null;
-  return readYamlish(text);
+  return parseYaml(text);
 }
 
 export function saveProfile(data: Record<string, string>): { path: string } {
   const dir = path.dirname(profilePath());
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-  const lines = Object.entries(data).map(([k, v]) => `${k}: "${v}"`);
-  fs.writeFileSync(profilePath(), lines.join("\n") + "\n");
+  // Merge with existing profile
+  const existing = getProfile() ?? {};
+  const merged = { ...existing, ...data };
+  fs.writeFileSync(profilePath(), YAML.stringify(merged));
   return { path: profilePath() };
 }
