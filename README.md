@@ -1,8 +1,8 @@
 # neuron-inspector
 
-**51 browser tools for AI agents.** Your AI can't see your browser. This fixes that.
+**91 browser tools for AI agents.** Your AI can't see your browser. This fixes that.
 
-Inspect DOM, automate clicks, run JavaScript, search network traffic, audit security, check accessibility, scan SEO, mock APIs, extract structured data, record demos — all from Claude Code, Cursor, Windsurf, or any MCP client.
+Inspect DOM, automate clicks, run JavaScript, search network traffic, audit security, check accessibility, scan SEO, mock APIs, extract structured data, record demos, schedule workflows, save session state — all from Claude Code, Cursor, Windsurf, or any MCP client.
 
 No API keys. No cloud. Runs on localhost.
 
@@ -125,7 +125,7 @@ The agent calls `neuron_perf_snapshot` and gets back Core Web Vitals, render-blo
 
 ---
 
-## All 51 tools
+## All 91 tools
 
 ### Inspect & Debug
 | Tool | What it does |
@@ -148,6 +148,11 @@ The agent calls `neuron_perf_snapshot` and gets back Core Web Vitals, render-blo
 | `neuron_open_tab` | Open a new tab |
 | `neuron_reload` | Reload a tab |
 | `neuron_run_sequence` | Multi-step automation (click, type, wait, eval) |
+| `neuron_vision_act` | Screenshot + element map for selector-free visual interaction |
+| `neuron_approve_via_whatsapp` | Send approval request to WhatsApp, wait for decision |
+| `neuron_extract_to_json` | Structured extraction with webhook push, CSV/YAML output |
+| `neuron_grab_media` | Download video/audio from any platform (IG, TikTok, X, FB, LI, YT) |
+| `neuron_grab_media_batch` | Batch download up to 5 videos |
 
 ### Network Intelligence
 | Tool | What it does |
@@ -200,6 +205,11 @@ The agent calls `neuron_perf_snapshot` and gets back Core Web Vitals, render-blo
 | `neuron_get_watches` | Check accumulated changes |
 | `neuron_stop_watch` | Stop watching |
 | `neuron_extract_data` | Extract structured data from feeds, tables, listings |
+| `neuron_monitor_create` | Watch a URL for changes (content, price, new items, text appears/disappears) |
+| `neuron_monitor_list` | List active monitors |
+| `neuron_monitor_remove` | Remove a monitor |
+| `neuron_monitor_check` | Force immediate check |
+| `neuron_monitor_alerts` | Get triggered alerts |
 
 ### Demo Recording
 | Tool | What it does |
@@ -212,6 +222,23 @@ The agent calls `neuron_perf_snapshot` and gets back Core Web Vitals, render-blo
 | `neuron_start_demo` | Record a demo video with chapters + cursor |
 | `neuron_workflow_status` | Engine state |
 
+### Scheduler
+| Tool | What it does |
+|------|-------------|
+| `neuron_schedule_recipe` | Schedule a recipe on interval or daily cron |
+| `neuron_schedule_list` | List scheduled recipes with next run time |
+| `neuron_schedule_remove` | Remove a schedule |
+| `neuron_schedule_toggle` | Enable/disable a schedule |
+
+### Session State
+| Tool | What it does |
+|------|-------------|
+| `neuron_session_save` | Save cross-session state (cursor, working set, progress) |
+| `neuron_session_load` | Load session state (returns null if none, for resume-or-start logic) |
+| `neuron_session_list` | List active sessions |
+| `neuron_session_delete` | Delete/complete a session |
+| `neuron_session_checkpoint` | Quick progress update (hot-path for loops) |
+
 ### Other
 | Tool | What it does |
 |------|-------------|
@@ -222,15 +249,20 @@ The agent calls `neuron_perf_snapshot` and gets back Core Web Vitals, render-blo
 
 ## Recipes — purpose-built agents
 
-The 51 tools are primitives. A **recipe** turns them into a purpose-built agent — a QA engineer, a job applicant, a web researcher. Recipes are shareable, and they get better with every run.
+The 91 tools are primitives. A **recipe** turns them into a purpose-built agent — a QA engineer, a job applicant, a web researcher. Recipes are shareable, and they get better with every run.
 
 ### Built-in recipes
 
 | Recipe | What it does |
 |--------|-------------|
+| **[Planner](recipes/planner/)** | Plans multi-step workflows, tracks progress, adjusts on failure |
 | **[Web Researcher](recipes/web-researcher/)** | Deep-dives into topics, cross-references sources, produces reports with citations |
 | **[Job Applicant](recipes/job-applicant/)** | Searches job boards, evaluates fit, writes cover letters, fills forms, tracks outcomes |
 | **[QA Engineer](recipes/qa-engineer/)** | Tests web apps — finds bugs, checks a11y, audits security, builds regression suites |
+| **[LinkedIn Outreach](recipes/linkedin-outreach/)** | Finds prospects, sends connection requests, tracks engagement |
+| **[Social Ops](recipes/social-ops/)** | Manages social posting, monitors mentions, responds to DMs |
+| **[Email Outreach](recipes/email-outreach/)** | Sends cold emails, tracks opens, follows up based on engagement |
+| **[Content Repurposing](recipes/content-repurposing/)** | Takes long-form content and breaks it into platform-specific posts |
 
 ### How recipes work
 
@@ -242,7 +274,7 @@ A recipe is a folder with instructions (`agent.md`) and config (`recipe.yaml`). 
 
 ### Use a recipe
 
-Copy a recipe's `agent.md` into your project as a CLAUDE.md (or append it), fill in the `{{variables}}` from `recipe.yaml`, and run. The recipe tells your AI agent exactly how to use the 51 tools for that purpose.
+Copy a recipe's `agent.md` into your project as a CLAUDE.md (or append it), fill in the `{{variables}}` from `recipe.yaml`, and run. The recipe tells your AI agent exactly how to use the 91 tools for that purpose.
 
 ### Build your own
 

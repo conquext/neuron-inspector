@@ -5,6 +5,10 @@
 
 import type { ToolDef } from "./tools.js";
 import * as recipes from "./recipes.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
+import YAML from "yaml";
 
 /** Track the active recipe so neuron_recipe_complete knows what to log. */
 let activeRecipe: { slug: string; startedAt: string; variables: Record<string, unknown> } | null = null;
@@ -194,6 +198,14 @@ export const RECIPE_TOOLS: ToolDef[] = [
       },
     },
   },
+  {
+    name: "neuron_quickstart",
+    description:
+      "First-run onboarding. Checks extension connection status, shows available recipes, " +
+      "checks if a user profile exists, and suggests the best first action. Call this when " +
+      "you first connect to neuron-inspector and aren't sure where to start.",
+    inputSchema: { type: "object", properties: {} },
+  },
 ];
 
 /** Handle a recipe tool call locally (no extension needed). */
@@ -229,6 +241,27 @@ export async function handleRecipeTool(
       // Track active run
       activeRecipe = { slug, startedAt: new Date().toISOString(), variables: resolved };
 
+      // Check for and consume pending scheduled runs
+      const pendingPath = path.join(os.homedir(), ".neuron", "pending-runs.yaml");
+      let pendingRuns: Array<{ slug: string; variables?: Record<string, unknown>; rules?: string[]; scheduled_at?: string }> = [];
+      try {
+        const pendingText = fs.readFileSync(pendingPath, "utf8");
+        const parsed = YAML.parse(pendingText);
+        if (Array.isArray(parsed)) pendingRuns = parsed;
+      } catch { /* no pending runs file */ }
+
+      // Remove this slug from pending if it was a scheduled run
+      if (pendingRuns.length > 0) {
+        const remaining = pendingRuns.filter(p => p.slug !== slug);
+        if (remaining.length !== pendingRuns.length) {
+          if (remaining.length === 0) {
+            try { fs.unlinkSync(pendingPath); } catch { /* ok */ }
+          } else {
+            fs.writeFileSync(pendingPath, YAML.stringify(remaining));
+          }
+        }
+      }
+
       // Get memory stats for evolve hint
       const memory = recipes.getMemory(slug, 1);
       const shouldEvolve = memory.total >= 5;
@@ -262,6 +295,9 @@ export async function handleRecipeTool(
           : null,
         pipes: recipe.recipe_yaml.includes("inputs:")
           ? "This recipe has input pipes — check resolved_variables for data from other recipes."
+          : null,
+        pending_scheduled: pendingRuns.filter(p => p.slug !== slug).length > 0
+          ? pendingRuns.filter(p => p.slug !== slug).map(p => p.slug)
           : null,
       };
     }
@@ -359,6 +395,41 @@ export async function handleRecipeTool(
         global: args.global as string[] | undefined,
         platform: args.platform as Record<string, string[]> | undefined,
       });
+
+    case "neuron_quickstart": {
+      const recipeList = recipes.listRecipes();
+      const profile = recipes.getProfile();
+      const rules = recipes.getRules();
+
+      // Check for pending scheduled runs
+      const pendingPath = path.join(os.homedir(), ".neuron", "pending-runs.yaml");
+      let pendingRuns: unknown[] = [];
+      try {
+        const text = fs.readFileSync(pendingPath, "utf8");
+        const parsed = YAML.parse(text);
+        if (Array.isArray(parsed)) pendingRuns = parsed;
+      } catch { /* no pending runs */ }
+
+      return {
+        status: "ready",
+        profile: profile ? { exists: true, name: (profile as Record<string, unknown>).name } : { exists: false, hint: "Set up your profile with neuron_profile_save — it auto-fills recipe variables (name, email, location, timezone)" },
+        recipes: {
+          total: recipeList.length,
+          available: recipeList.map(r => ({ name: r.name, slug: r.slug, description: r.description, has_learnings: r.has_learnings, runs: r.memory_count })),
+        },
+        rules: {
+          total: rules.never.length + rules.global.length + Object.values(rules.platform).flat().length,
+          hint: rules.never.length === 0 ? "No rules set yet. Use neuron_rules_set to add constraints (e.g. 'never follow anyone from the brand account')" : null,
+        },
+        pending_scheduled_runs: pendingRuns.length > 0 ? pendingRuns : null,
+        suggested_first_actions: [
+          !profile ? "1. Set up your profile: neuron_profile_save({ data: { name: '...', email: '...', timezone: '...' } })" : null,
+          "2. List recipes: neuron_recipe_list",
+          "3. Run your first recipe: neuron_recipe_run({ slug: 'web-researcher', variables: { research_topics: '...' } })",
+          "Tip: The planner recipe researches platform constraints before outreach — run it first for any social campaign",
+        ].filter(Boolean),
+      };
+    }
 
     default:
       throw new Error(`Unknown recipe tool: ${name}`);
