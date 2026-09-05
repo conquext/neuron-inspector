@@ -1,0 +1,93 @@
+name: Social Ops
+version: 1.0.0
+description: >
+  Multi-platform social operations — comment on posts, DM users, engage with
+  followers of a page, target likers of specific content, reply under targeted
+  posts. Works across Instagram, X/Twitter, Facebook, TikTok, and LinkedIn.
+  One recipe, all platforms, with per-platform playbooks.
+author: neuron
+tags: [social, instagram, twitter, x, facebook, tiktok, linkedin, dms, comments, engagement, outreach]
+
+variables:
+  operation:
+    prompt: "What do you want to do?"
+    options: [comment, dm, like, follow, engage-followers, engage-likers, engage-commenters]
+    required: true
+  platform:
+    prompt: "Which platform?"
+    options: [instagram, x, facebook, tiktok, linkedin]
+    required: true
+  target:
+    prompt: "Target — a post URL, a page/account URL, a hashtag, or a search query"
+    type: text
+    required: true
+    example: "https://instagram.com/p/ABC123 or @letschop or #lagosfoodies"
+  message_template:
+    prompt: "Message or comment template. Use {name} for the person's name, {post} for their post topic."
+    type: text
+    default: ""
+    example: "Love this! We're building something for food lovers in Lagos — would love your thoughts"
+  personalize:
+    prompt: "Read each person's profile before messaging to personalize?"
+    options: ["yes", "no"]
+    default: "yes"
+  daily_cap:
+    prompt: "Max actions per day"
+    type: number
+    default: 20
+  session_cap:
+    prompt: "Max actions this session"
+    type: number
+    default: 5
+  min_delay_seconds:
+    prompt: "Minimum seconds between actions"
+    type: number
+    default: 60
+  output_path:
+    prompt: "Where to save logs"
+    type: path
+    default: "./social-ops"
+  approval_mode:
+    prompt: "Review each action before executing?"
+    options: [review-all, auto-after-3]
+    default: review-all
+
+tools:
+  required:
+    - neuron_navigate
+    - neuron_extract_data
+    - neuron_find_elements
+    - neuron_type
+    - neuron_click
+    - neuron_scroll
+    - neuron_screenshot
+    - neuron_evaluate_js
+    - neuron_list_tabs
+    - neuron_get_errors
+    - neuron_detect_blocker
+    - neuron_research_page
+    - neuron_research_profiles
+    - neuron_search_and_collect
+    - neuron_monitor_action
+  optional:
+    - neuron_open_tab
+    - neuron_snapshot_state
+    - neuron_diff_states
+
+pipes:
+  outputs:
+    ops_log:
+      format: yaml
+      path: "{{output_path}}/ops-log.yaml"
+      description: "Log of all social actions taken — who, what, when, response"
+  inputs:
+    campaign_plan:
+      from: planner
+      output: plan
+      description: "Campaign plan with platform constraints and strategy"
+      optional: true
+
+limits:
+  max_tabs: 3
+  max_duration_minutes: 45
+  require_human_approval: true
