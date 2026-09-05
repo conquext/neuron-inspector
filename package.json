@@ -1,0 +1,58 @@
+{
+  "name": "neuron-inspector",
+  "version": "0.1.1",
+  "description": "51 browser tools for AI agents. Turn Chrome into an MCP server — inspect DOM, automate clicks, audit security, mock APIs, extract data, record demos.",
+  "type": "module",
+  "main": "dist/server.js",
+  "bin": {
+    "neuron-inspector": "./bin/neuron-inspector.js"
+  },
+  "files": [
+    "dist/**",
+    "bin/**"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "start": "node dist/server.js"
+  },
+  "license": "MIT",
+  "author": "Plazah Ltd",
+  "homepage": "https://neuron.ng/extension",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/conquext/neuron-inspector.git"
+  },
+  "keywords": [
+    "neuron",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "chrome-extension",
+    "browser-tools",
+    "browser-automation",
+    "inspector",
+    "devtools",
+    "ai-agents",
+    "claude-code",
+    "cursor",
+    "windsurf",
+    "dom-inspector",
+    "security-audit",
+    "accessibility",
+    "seo-audit",
+    "network-mocking",
+    "web-scraping",
+    "browser-devtools"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
