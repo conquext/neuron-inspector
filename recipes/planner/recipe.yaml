@@ -1,0 +1,62 @@
+name: Planner
+version: 1.0.0
+description: >
+  The meta-agent. Takes a high-level goal, researches the platform and audience
+  using the browser, understands constraints and best practices, then builds a
+  campaign plan — or generates a new recipe — before anything is executed.
+  This is the planning layer that other recipes should invoke first.
+author: neuron
+tags: [meta, planning, research, strategy, campaign]
+
+variables:
+  goal:
+    prompt: "What do you want to accomplish? Be specific about platform, audience, and objective."
+    type: text
+    required: true
+    example: "Reach 200 Nigerian food enthusiasts on LinkedIn to tell them about our meal ordering app"
+  platform:
+    prompt: "Primary platform"
+    options: [linkedin, x, instagram, tiktok, facebook, web, any]
+    default: any
+  output_path:
+    prompt: "Where to save the plan"
+    type: path
+    default: "./plans"
+  create_recipe:
+    prompt: "Generate a reusable recipe from the plan?"
+    options: ["yes", "no"]
+    default: "no"
+
+tools:
+  required:
+    - neuron_navigate
+    - neuron_extract_data
+    - neuron_search_traffic
+    - neuron_find_elements
+    - neuron_scroll
+    - neuron_screenshot
+    - neuron_click
+    - neuron_list_tabs
+  optional:
+    - neuron_evaluate_js
+    - neuron_open_tab
+    - neuron_discover_apis
+    - neuron_security_scan
+    - neuron_recipe_create
+
+pipes:
+  outputs:
+    plan:
+      format: markdown
+      path: "{{output_path}}/{{date}}-{{goal_slug}}.md"
+      description: "Campaign plan with platform constraints, audience analysis, message strategy, pacing, and guardrails"
+    constraints:
+      format: yaml
+      path: "{{output_path}}/{{date}}-{{goal_slug}}-constraints.yaml"
+      description: "Platform rate limits, anti-detection rules, and hard boundaries discovered during research"
+  inputs: {}
+
+limits:
+  max_tabs: 6
+  max_duration_minutes: 20
+  require_human_approval: false

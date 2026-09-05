@@ -1,0 +1,99 @@
+name: LinkedIn Outreach
+version: 1.0.0
+description: >
+  Researches LinkedIn profiles, finds personalized hooks, composes warm DMs
+  that reference specific details from each person's profile, and sends them
+  with human-like pacing. Tracks response rates and evolves message strategy
+  based on what actually gets replies.
+author: neuron
+tags: [linkedin, outreach, dms, networking, lead-gen, cold-outreach]
+
+variables:
+  product_context:
+    prompt: "What are you reaching out about? Describe the product/service/opportunity in 2-3 sentences."
+    type: text
+    required: true
+    example: "LetsChop is a meal ordering app for Nigerian organizations — handles group food orders, vendor management, and delivery logistics."
+  audience_description:
+    prompt: "Who should you reach out to? Be specific about role, industry, location, interests."
+    type: text
+    required: true
+    example: "Nigerian professionals who work in offices, HR managers, office managers, facility managers, startup founders in Lagos/Abuja"
+  search_queries:
+    prompt: "LinkedIn search queries to find targets (one per line)"
+    type: text
+    required: true
+    example: "HR manager Lagos Nigeria\noffice manager Abuja Nigeria\nfacility manager Nigeria food"
+  tone:
+    prompt: "Message tone"
+    options: [curious, direct, warm, professional]
+    default: curious
+  daily_cap:
+    prompt: "Max messages per day"
+    type: number
+    default: 15
+  session_cap:
+    prompt: "Max messages per session (run)"
+    type: number
+    default: 5
+  min_delay_seconds:
+    prompt: "Minimum seconds between messages"
+    type: number
+    default: 120
+  output_path:
+    prompt: "Where to save outreach logs"
+    type: path
+    default: "./outreach"
+  approval_mode:
+    prompt: "Review each message before sending, or auto-send after first 3?"
+    options: [review-all, auto-after-3]
+    default: review-all
+
+tools:
+  required:
+    - neuron_navigate
+    - neuron_extract_data
+    - neuron_find_elements
+    - neuron_type
+    - neuron_click
+    - neuron_scroll
+    - neuron_screenshot
+    - neuron_evaluate_js
+    - neuron_list_tabs
+    - neuron_get_errors
+    - neuron_detect_blocker
+    - neuron_snapshot_state
+    - neuron_diff_states
+  optional:
+    - neuron_open_tab
+    - neuron_search_traffic
+    - neuron_watch_element
+    - neuron_get_watches
+    - neuron_stop_watch
+
+pipes:
+  outputs:
+    outreach_log:
+      format: yaml
+      path: "{{output_path}}/outreach-log.yaml"
+      description: "Running log of all messages sent — profile, message, timestamp, response status"
+    message_templates:
+      format: markdown
+      path: "{{output_path}}/templates.md"
+      description: "Effective message templates that emerged from learning what works"
+  inputs:
+    campaign_plan:
+      from: planner
+      output: plan
+      description: "Campaign plan with platform constraints, audience analysis, pacing strategy"
+      optional: true
+    platform_constraints:
+      from: planner
+      output: constraints
+      description: "Rate limits and anti-detection rules researched by the planner"
+      optional: true
+
+limits:
+  max_tabs: 3
+  max_duration_minutes: 45
+  require_human_approval: true
