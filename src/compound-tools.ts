@@ -189,6 +189,46 @@ export const COMPOUND_TOOLS: ToolDef[] = [
       required: ["tabId", "action"],
     },
   },
+  {
+    name: "neuron_grab_media",
+    description:
+      "Extract and download video/audio from any page. Navigates to the URL, plays the media to " +
+      "trigger network requests, searches captured traffic for video/audio streams (mp4, m3u8, " +
+      "webm, mp3, blob), extracts the CDN URLs, and initiates a browser download. Works on " +
+      "Instagram reels, TikTok videos, X/Twitter videos, Facebook videos, LinkedIn videos, YouTube, " +
+      "and most sites with embedded video. Returns the download URLs found and download status.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "Page URL containing the video (e.g. an Instagram reel URL, TikTok video URL)" },
+        filename: { type: "string", description: "Filename to save as (optional — auto-generates from URL)" },
+        tabId: { type: "number", description: "Use an existing tab (optional)" },
+        waitSeconds: { type: "number", description: "How long to wait for video to start loading (default: 5)" },
+        preferQuality: { type: "string", description: "Preferred quality: 'highest', 'lowest', 'auto' (default: highest)" },
+      },
+      required: ["url"],
+    },
+  },
+  {
+    name: "neuron_grab_media_batch",
+    description:
+      "Download videos from multiple URLs. Opens each in a tab, extracts video streams, " +
+      "downloads all. Up to 5 URLs per call. Returns results for each URL with download status " +
+      "and any failures. Use for batch downloading from feeds, trending pages, or saved lists.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        urls: {
+          type: "array",
+          items: { type: "string" },
+          description: "Video page URLs (max 5)",
+        },
+        outputDir: { type: "string", description: "Subdirectory name for downloads (optional)" },
+        delayMs: { type: "number", description: "Delay between processing each URL in ms (default: 3000)" },
+      },
+      required: ["urls"],
+    },
+  },
 ];
 
 // ── Handlers ────────────────────────────────────────────────
@@ -211,6 +251,10 @@ export async function handleCompoundTool(
       return auditPage(args, ctx);
     case "neuron_monitor_action":
       return monitorAction(args, ctx);
+    case "neuron_grab_media":
+      return grabMedia(args, ctx);
+    case "neuron_grab_media_batch":
+      return grabMediaBatch(args, ctx);
     default:
       throw new Error(`Unknown compound tool: ${name}`);
   }
@@ -611,5 +655,340 @@ async function monitorAction(
     screenshot,
     diff,
     errors,
+  };
+}
+
+// ── Media patterns ──────────────────────────────────────────
+
+const VIDEO_PATTERNS = [
+  ".mp4", ".m3u8", ".webm", ".m4v", ".mov",
+  "video/mp4", "video/webm", "video/quicktime",
+  "application/x-mpegURL", "application/vnd.apple.mpegurl",
+];
+
+const VIDEO_CDN_PATTERNS = [
+  /cdninstagram\.com.*\.mp4/,
+  /scontent.*\.cdninstagram\.com/,
+  /video\.twimg\.com/,
+  /pbs\.twimg\.com.*\/vid\//,
+  /video\.xx\.fbcdn\.net/,
+  /scontent.*\.xx\.fbcdn\.net.*video/,
+  /v\d+-webapp.*\.tiktok.*\.com/,
+  /pull-.*\.tiktokcdn.*\.com/,
+  /googlevideo\.com\/videoplayback/,
+  /\.googlevideo\.com/,
+];
+
+interface MediaCandidate {
+  url: string;
+  type: string;
+  source: string;
+  size?: number;
+}
+
+function scoreMediaUrl(url: string): number {
+  // Higher = better quality
+  let score = 0;
+  if (/1080|hd|high/i.test(url)) score += 10;
+  if (/720/i.test(url)) score += 7;
+  if (/480/i.test(url)) score += 4;
+  if (/360|240|low/i.test(url)) score += 1;
+  if (/\.mp4/i.test(url)) score += 3;
+  if (/\.m3u8/i.test(url)) score += 1; // HLS needs extra handling
+  // Prefer longer URLs (usually contain more path segments = direct CDN)
+  if (url.length > 200) score += 2;
+  return score;
+}
+
+// ── Media grab ──────────────────────────────────────────────
+
+async function grabMedia(
+  args: Record<string, unknown>,
+  ctx: BridgeContext,
+): Promise<unknown> {
+  const url = args.url as string;
+  const filename = args.filename as string | undefined;
+  const waitSec = (args.waitSeconds as number) ?? 5;
+  const preferQuality = (args.preferQuality as string) ?? "highest";
+
+  // Open the page
+  let tabId = args.tabId as number | undefined;
+  if (!tabId) {
+    const tab = (await call(ctx, "openTab", { url })) as { tabId?: number };
+    tabId = tab?.tabId;
+    await sleep(3000);
+  } else {
+    await call(ctx, "navigateTo", { tabId, url });
+    await sleep(3000);
+  }
+
+  if (!tabId) throw new Error("Failed to open tab");
+
+  // Try to click play / interact to start video loading
+  try {
+    // Common play button selectors across platforms
+    await call(ctx, "evaluateJS", {
+      tabId,
+      expression: `
+        // Try clicking play buttons or video elements to trigger load
+        const playBtns = document.querySelectorAll(
+          'video, [aria-label*="Play"], [aria-label*="play"], [data-testid*="play"], ' +
+          'button[class*="play"], div[class*="play"], svg[aria-label*="Play"]'
+        );
+        for (const el of playBtns) {
+          if (el instanceof HTMLElement) { el.click(); break; }
+        }
+        // Also try to play any video element directly
+        const video = document.querySelector('video');
+        if (video) { video.play().catch(() => {}); }
+        'triggered'
+      `,
+    });
+  } catch {
+    // Non-fatal — the page might auto-play
+  }
+
+  // Wait for video to load and network requests to be captured
+  await sleep(waitSec * 1000);
+
+  // Search captured traffic for video URLs
+  const candidates: MediaCandidate[] = [];
+
+  // Method 1: Search request log for video content types and patterns
+  for (const pattern of [".mp4", ".m3u8", ".webm", "video/", "mpegURL"]) {
+    try {
+      const results = (await call(ctx, "searchTraffic", {
+        query: pattern,
+        limit: 20,
+      })) as { matches?: Array<{ url?: string; contentType?: string; size?: number }> } | unknown;
+
+      const matches = (results as { matches?: unknown[] })?.matches;
+      if (Array.isArray(matches)) {
+        for (const m of matches) {
+          const match = m as Record<string, unknown>;
+          const mUrl = String(match.url || "");
+          if (mUrl && isVideoUrl(mUrl)) {
+            candidates.push({
+              url: mUrl,
+              type: String(match.contentType || guessType(mUrl)),
+              source: "traffic_search",
+              size: match.size as number | undefined,
+            });
+          }
+        }
+      }
+    } catch {
+      // Continue with other patterns
+    }
+  }
+
+  // Method 2: Check request log filtered by URL patterns
+  try {
+    const requests = (await call(ctx, "getRecentRequests", {
+      tabId,
+      limit: 200,
+    })) as { requests?: Array<{ url?: string; responseHeaders?: Record<string, string>; status?: number }> } | unknown;
+
+    const reqList = (requests as { requests?: unknown[] })?.requests;
+    if (Array.isArray(reqList)) {
+      for (const r of reqList) {
+        const req = r as Record<string, unknown>;
+        const rUrl = String(req.url || "");
+        if (isVideoUrl(rUrl)) {
+          candidates.push({
+            url: rUrl,
+            type: guessType(rUrl),
+            source: "request_log",
+          });
+        }
+      }
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  // Method 3: Extract video src from DOM
+  try {
+    const domResult = await call(ctx, "evaluateJS", {
+      tabId,
+      expression: `
+        const sources = [];
+        // Direct video elements
+        document.querySelectorAll('video source, video').forEach(el => {
+          const src = el.src || el.getAttribute('src');
+          if (src && !src.startsWith('blob:')) sources.push({ url: src, source: 'video_element' });
+          // Check source children
+          el.querySelectorAll?.('source')?.forEach(s => {
+            const sSrc = s.src || s.getAttribute('src');
+            if (sSrc && !sSrc.startsWith('blob:')) sources.push({ url: sSrc, source: 'source_element' });
+          });
+        });
+        // OG video meta
+        const ogVideo = document.querySelector('meta[property="og:video"]');
+        if (ogVideo?.content) sources.push({ url: ogVideo.content, source: 'og_meta' });
+        const ogVideoUrl = document.querySelector('meta[property="og:video:url"]');
+        if (ogVideoUrl?.content) sources.push({ url: ogVideoUrl.content, source: 'og_meta' });
+        JSON.stringify(sources);
+      `,
+    });
+    const domSources = JSON.parse(String(domResult ?? "[]")) as Array<{ url: string; source: string }>;
+    for (const s of domSources) {
+      if (s.url) {
+        candidates.push({ url: s.url, type: guessType(s.url), source: s.source });
+      }
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  // Deduplicate by URL
+  const seen = new Set<string>();
+  const unique = candidates.filter((c) => {
+    if (seen.has(c.url)) return false;
+    seen.add(c.url);
+    return true;
+  });
+
+  if (unique.length === 0) {
+    return {
+      url,
+      tabId,
+      status: "no_video_found",
+      message: "No downloadable video URL found in network traffic or DOM. The video may use DRM, blob URLs, or require authentication.",
+      candidates_checked: candidates.length,
+    };
+  }
+
+  // Sort by quality preference
+  unique.sort((a, b) => {
+    const scoreA = scoreMediaUrl(a.url);
+    const scoreB = scoreMediaUrl(b.url);
+    return preferQuality === "lowest" ? scoreA - scoreB : scoreB - scoreA;
+  });
+
+  const best = unique[0];
+
+  // Initiate download via the extension
+  let downloadStatus = "url_found";
+  try {
+    const dlFilename = filename || generateFilename(url, best.type);
+    await call(ctx, "evaluateJS", {
+      tabId,
+      expression: `
+        // Use fetch to download, then create a download link
+        fetch("${best.url.replace(/"/g, '\\"')}", { credentials: 'include' })
+          .then(r => r.blob())
+          .then(blob => {
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = "${dlFilename.replace(/"/g, '\\"')}";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(a.href);
+          })
+          .catch(() => {
+            // Fallback: open the URL directly
+            window.open("${best.url.replace(/"/g, '\\"')}", '_blank');
+          });
+        'download_initiated'
+      `,
+    }, 30000);
+    downloadStatus = "download_initiated";
+  } catch {
+    downloadStatus = "url_found_download_failed";
+  }
+
+  return {
+    url,
+    tabId,
+    status: downloadStatus,
+    best_url: best.url,
+    type: best.type,
+    source: best.source,
+    all_candidates: unique.length,
+    candidates: unique.slice(0, 5).map((c) => ({
+      url: c.url,
+      type: c.type,
+      source: c.source,
+      quality_score: scoreMediaUrl(c.url),
+    })),
+  };
+}
+
+function isVideoUrl(url: string): boolean {
+  const lower = url.toLowerCase();
+  if (VIDEO_PATTERNS.some((p) => lower.includes(p))) return true;
+  if (VIDEO_CDN_PATTERNS.some((p) => p.test(url))) return true;
+  return false;
+}
+
+function guessType(url: string): string {
+  const lower = url.toLowerCase();
+  if (lower.includes(".mp4") || lower.includes("video/mp4")) return "video/mp4";
+  if (lower.includes(".m3u8") || lower.includes("mpegurl")) return "application/x-mpegURL";
+  if (lower.includes(".webm")) return "video/webm";
+  if (lower.includes(".mp3") || lower.includes("audio/mp")) return "audio/mpeg";
+  return "video/unknown";
+}
+
+function generateFilename(pageUrl: string, type: string): string {
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  let platform = "video";
+  if (pageUrl.includes("instagram")) platform = "ig";
+  else if (pageUrl.includes("tiktok")) platform = "tk";
+  else if (pageUrl.includes("x.com") || pageUrl.includes("twitter")) platform = "x";
+  else if (pageUrl.includes("facebook")) platform = "fb";
+  else if (pageUrl.includes("linkedin")) platform = "li";
+  else if (pageUrl.includes("youtube") || pageUrl.includes("youtu.be")) platform = "yt";
+
+  const ext = type.includes("mp4") ? ".mp4" : type.includes("webm") ? ".webm" : ".mp4";
+  return `${platform}-${ts}${ext}`;
+}
+
+async function grabMediaBatch(
+  args: Record<string, unknown>,
+  ctx: BridgeContext,
+): Promise<unknown> {
+  const urls = (args.urls as string[]).slice(0, 5);
+  const delayMs = (args.delayMs as number) ?? 3000;
+
+  const results: Array<{
+    url: string;
+    status: string;
+    best_url?: string;
+    type?: string;
+    error?: string;
+  }> = [];
+
+  for (const url of urls) {
+    try {
+      const result = (await grabMedia(
+        { url, preferQuality: "highest" },
+        ctx,
+      )) as Record<string, unknown>;
+
+      results.push({
+        url,
+        status: String(result.status || "unknown"),
+        best_url: result.best_url as string | undefined,
+        type: result.type as string | undefined,
+      });
+    } catch (err) {
+      results.push({
+        url,
+        status: "error",
+        error: (err as Error).message,
+      });
+    }
+
+    if (delayMs > 0) await sleep(delayMs);
+  }
+
+  return {
+    total: results.length,
+    downloaded: results.filter((r) => r.status === "download_initiated").length,
+    failed: results.filter((r) => r.status === "error" || r.status === "no_video_found").length,
+    results,
   };
 }
