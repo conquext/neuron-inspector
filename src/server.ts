@@ -6,10 +6,11 @@ import { PendingCalls } from "./correlation.js";
 import { TOOLS, toolToPrimitive } from "./tools.js";
 import { RECIPE_TOOLS, handleRecipeTool } from "./recipe-tools.js";
 import { COMPOUND_TOOLS, handleCompoundTool } from "./compound-tools.js";
+import { SCHEDULER_TOOLS, handleSchedulerTool, startScheduler } from "./scheduler.js";
+import { SESSION_TOOLS, handleSessionTool } from "./session-state.js";
+import { MONITOR_TOOLS, handleMonitorTool, startMonitor } from "./monitor.js";
 
 // ── JSON-schema → Zod raw shape ──────────────────────────────
-// The tool defs describe params as JSON schema; the MCP SDK (v1.30+) requires a
-// Zod raw shape at registration. Convert here so the tool defs stay declarative.
 type JsonProp = { type?: string; description?: string; enum?: string[]; items?: JsonProp; properties?: Record<string, JsonProp>; required?: string[] };
 
 function propToZod(p: JsonProp): ZodTypeAny {
@@ -60,15 +61,10 @@ wss.on("connection", (ws) => {
   ws.on("message", (data) => {
     try {
       const msg = JSON.parse(data.toString());
-
-      // Handle tool-call responses from the extension
       if (msg.type === "response" && msg.requestId) {
         pending.onResponse(msg);
         return;
       }
-
-      // Other messages (state_snapshot, credentials_updated, flow, heartbeat)
-      // are push events — log and ignore for MCP purposes
     } catch {
       // ignore unparseable messages
     }
@@ -87,10 +83,54 @@ console.error(`[bridge] WebSocket server listening on 127.0.0.1:${PORT}`);
 
 const mcp = new McpServer({
   name: "neuron-inspector",
-  version: "0.2.0",
+  version: "0.4.0",
 });
 
-// Browser tools (forwarded to extension via WebSocket)
+// ── Helper: register a group of ToolDef[] with a handler ────
+
+type ToolHandler = (name: string, args: Record<string, unknown>) => Promise<unknown>;
+
+function registerLocalTools(tools: { name: string; description: string; inputSchema: Record<string, unknown> }[], handler: ToolHandler): void {
+  for (const tool of tools) {
+    mcp.tool(tool.name, tool.description, shapeFromSchema(tool.inputSchema as JsonProp), async (args) => {
+      try {
+        const result = await handler(tool.name, args as Record<string, unknown>);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    });
+  }
+}
+
+function registerBrowserTools(tools: { name: string; description: string; inputSchema: Record<string, unknown> }[], handler: (name: string, args: Record<string, unknown>, ctx: { ws: WebSocket; pending: PendingCalls }) => Promise<unknown>): void {
+  for (const tool of tools) {
+    mcp.tool(tool.name, tool.description, shapeFromSchema(tool.inputSchema as JsonProp), async (args) => {
+      if (!extensionWs || extensionWs.readyState !== WebSocket.OPEN) {
+        return {
+          content: [{ type: "text", text: "Extension not connected. Open Chrome with the Neuron extension and enable developer mode." }],
+          isError: true,
+        };
+      }
+      try {
+        const result = await handler(tool.name, args as Record<string, unknown>, { ws: extensionWs, pending });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    });
+  }
+}
+
+// ── Register all tool groups ────────────────────────────────
+
+// Browser primitives (forwarded to extension via WebSocket)
 for (const tool of TOOLS) {
   mcp.tool(tool.name, tool.description, shapeFromSchema(tool.inputSchema as JsonProp), async (args) => {
     if (!extensionWs || extensionWs.readyState !== WebSocket.OPEN) {
@@ -99,59 +139,56 @@ for (const tool of TOOLS) {
         isError: true,
       };
     }
-
     try {
       const primitiveName = toolToPrimitive(tool.name);
       const result = await pending.call(extensionWs, primitiveName, args as Record<string, unknown>);
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      };
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     } catch (err) {
-      return {
-        content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      };
+      return { content: [{ type: "text", text: `Error: ${(err as Error).message}` }], isError: true };
     }
   });
 }
 
-// Recipe tools (local, no extension needed)
-for (const tool of RECIPE_TOOLS) {
+// Compound tools (bridge-side orchestration → extension)
+registerBrowserTools(COMPOUND_TOOLS, handleCompoundTool);
+
+// Recipe + rules tools (local filesystem)
+registerLocalTools(RECIPE_TOOLS, handleRecipeTool);
+
+// Scheduler tools (local filesystem + timers)
+registerLocalTools(SCHEDULER_TOOLS, handleSchedulerTool);
+
+// Session state tools (local filesystem)
+registerLocalTools(SESSION_TOOLS, handleSessionTool);
+
+// Monitor tools (local filesystem + extension for checks)
+for (const tool of MONITOR_TOOLS) {
   mcp.tool(tool.name, tool.description, shapeFromSchema(tool.inputSchema as JsonProp), async (args) => {
     try {
-      const result = await handleRecipeTool(tool.name, args as Record<string, unknown>);
+      // Build a check function that uses the extension to visit pages
+      const checkFn = async (url: string, selector?: string): Promise<{ text: string; items?: unknown[] }> => {
+        if (!extensionWs || extensionWs.readyState !== WebSocket.OPEN) {
+          throw new Error("Extension not connected");
+        }
+        const tab = (await pending.call(extensionWs, "openTab", { url })) as { tabId?: number };
+        const tabId = tab?.tabId;
+        if (!tabId) throw new Error("Failed to open tab");
+        await new Promise((r) => setTimeout(r, 3000));
+        // Scroll to load content
+        await pending.call(extensionWs, "scrollPage", { tabId, deltaY: 600, smooth: true });
+        await new Promise((r) => setTimeout(r, 500));
+        const extractArgs: Record<string, unknown> = { tabId };
+        if (selector) extractArgs.selector = selector;
+        const data = await pending.call(extensionWs, "extractData", extractArgs);
+        // Close tab
+        try { await pending.call(extensionWs, "evaluateJS", { tabId, expression: "window.close()" }); } catch { /* ok */ }
+        return { text: JSON.stringify(data), items: Array.isArray(data) ? data : undefined };
+      };
+
+      const result = await handleMonitorTool(tool.name, args as Record<string, unknown>, checkFn);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     } catch (err) {
-      return {
-        content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      };
-    }
-  });
-}
-
-// Compound tools (bridge-side orchestration, forward to extension)
-for (const tool of COMPOUND_TOOLS) {
-  mcp.tool(tool.name, tool.description, shapeFromSchema(tool.inputSchema as JsonProp), async (args) => {
-    if (!extensionWs || extensionWs.readyState !== WebSocket.OPEN) {
-      return {
-        content: [{ type: "text", text: "Extension not connected. Open Chrome with the Neuron extension and enable developer mode." }],
-        isError: true,
-      };
-    }
-
-    try {
-      const result = await handleCompoundTool(
-        tool.name,
-        args as Record<string, unknown>,
-        { ws: extensionWs, pending },
-      );
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    } catch (err) {
-      return {
-        content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      };
+      return { content: [{ type: "text", text: `Error: ${(err as Error).message}` }], isError: true };
     }
   });
 }
@@ -161,8 +198,34 @@ for (const tool of COMPOUND_TOOLS) {
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await mcp.connect(transport);
-  const total = TOOLS.length + COMPOUND_TOOLS.length + RECIPE_TOOLS.length;
-  console.error(`[bridge] MCP server ready on stdio (${total} tools: ${TOOLS.length} browser + ${COMPOUND_TOOLS.length} compound + ${RECIPE_TOOLS.length} recipe)`);
+
+  const total = TOOLS.length + COMPOUND_TOOLS.length + RECIPE_TOOLS.length +
+    SCHEDULER_TOOLS.length + SESSION_TOOLS.length + MONITOR_TOOLS.length;
+  console.error(
+    `[bridge] MCP server ready on stdio (${total} tools: ` +
+    `${TOOLS.length} browser + ${COMPOUND_TOOLS.length} compound + ` +
+    `${RECIPE_TOOLS.length} recipe + ${SCHEDULER_TOOLS.length} scheduler + ` +
+    `${SESSION_TOOLS.length} session + ${MONITOR_TOOLS.length} monitor)`,
+  );
+
+  // Start background services
+  startScheduler();
+  startMonitor(async (url, selector) => {
+    if (!extensionWs || extensionWs.readyState !== WebSocket.OPEN) {
+      throw new Error("Extension not connected — monitor check skipped");
+    }
+    const tab = (await pending.call(extensionWs, "openTab", { url })) as { tabId?: number };
+    const tabId = tab?.tabId;
+    if (!tabId) throw new Error("Failed to open tab for monitor");
+    await new Promise((r) => setTimeout(r, 3000));
+    await pending.call(extensionWs, "scrollPage", { tabId, deltaY: 600, smooth: true });
+    await new Promise((r) => setTimeout(r, 500));
+    const args: Record<string, unknown> = { tabId };
+    if (selector) args.selector = selector;
+    const data = await pending.call(extensionWs, "extractData", args);
+    try { await pending.call(extensionWs, "evaluateJS", { tabId, expression: "window.close()" }); } catch { /* ok */ }
+    return { text: JSON.stringify(data), items: Array.isArray(data) ? data : undefined };
+  });
 }
 
 main().catch((err) => {

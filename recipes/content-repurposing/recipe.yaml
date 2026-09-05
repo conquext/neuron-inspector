@@ -1,0 +1,166 @@
+name: Content Repurposing
+description: |
+  Cross-platform content adaptation recipe. Takes high-performing or trending content
+  from one platform and intelligently repurposes it for another — preserving the core
+  insight while adapting format, tone, and style to the target platform's conventions.
+
+  Supports X → LinkedIn, Instagram → TikTok, blog → X thread, and all combinations.
+  Handles text, images, and video content.
+
+tags:
+  - content
+  - repurposing
+  - social-media
+  - cross-platform
+  - instagram
+  - x
+  - linkedin
+  - tiktok
+  - facebook
+  - content-strategy
+
+variables:
+  source_platform:
+    type: string
+    description: "Platform to pull content from (ig/x/li/tt/fb/web)"
+    required: true
+    enum: [ig, x, li, tt, fb, web]
+
+  target_platform:
+    type: string
+    description: "Platform to publish repurposed content to (ig/x/li/tt/fb)"
+    required: true
+    enum: [ig, x, li, tt, fb]
+
+  source_url:
+    type: string
+    description: "Direct URL to content you want to repurpose"
+    required: false
+    default: null
+
+  source_query:
+    type: string
+    description: "Search query to find trending content to repurpose (used if source_url not provided)"
+    required: false
+    default: null
+
+  content_type:
+    type: string
+    description: "Type of content to repurpose"
+    required: true
+    enum: [post, thread, reel, story, article, video, carousel]
+
+  voice_notes:
+    type: string
+    description: "Adaptation instructions (e.g., 'more casual for TikTok', 'professional for LinkedIn', 'add data points')"
+    required: false
+    default: "Adapt naturally to target platform conventions"
+
+  max_items:
+    type: integer
+    description: "Max number of content pieces to repurpose if searching"
+    required: false
+    default: 3
+    min: 1
+    max: 10
+
+  output_path:
+    type: string
+    description: "Local path to save repurposed content drafts and media"
+    required: false
+    default: "./repurposed"
+
+  approval_mode:
+    type: string
+    description: "How to handle posting approval (review-all requires approval for every post, auto-after-3 auto-approves after 3 successful repurposes)"
+    required: false
+    default: "review-all"
+    enum: [review-all, auto-after-3]
+
+  preserve_attribution:
+    type: boolean
+    description: "Whether to credit original source in repurposed content"
+    required: false
+    default: true
+
+  include_engagement_metrics:
+    type: boolean
+    description: "Whether to pull and log engagement metrics from source content"
+    required: false
+    default: true
+
+tools:
+  required:
+    - neuron_navigate
+    - neuron_extract_data
+    - neuron_find_elements
+    - neuron_type
+    - neuron_click
+    - neuron_scroll
+    - neuron_screenshot
+    - neuron_evaluate_js
+    - neuron_grab_media
+    - neuron_research_page
+    - neuron_search_and_collect
+    - neuron_monitor_action
+    - neuron_session_save
+    - neuron_session_load
+
+  optional:
+    - neuron_wait_for_selector
+    - neuron_execute_workflow
+    - neuron_har_export
+
+pipes:
+  outputs:
+    repurposed_log:
+      type: json
+      description: "Log of all repurposing actions: source URL, target URL, adaptation approach, timestamps"
+      schema:
+        items:
+          - source_url: string
+          - source_platform: string
+          - target_platform: string
+          - content_type: string
+          - adaptation_summary: string
+          - source_engagement: object
+          - posted_at: string
+          - target_url: string
+          - media_files: array
+
+    content_drafts:
+      type: markdown
+      description: "Drafts of all repurposed content with adaptation notes"
+
+  inputs:
+    from_web_researcher:
+      report:
+        description: "Research report on trending content (optional, can feed source_query results)"
+        required: false
+
+limits:
+  max_tabs: 4
+  max_duration_minutes: 30
+  require_human_approval: true
+  max_downloads_mb: 500
+
+safety:
+  rules:
+    - "Never repurpose private/restricted content"
+    - "Respect platform rate limits (max 5 posts per platform per hour)"
+    - "Preserve original attribution unless user explicitly disables it"
+    - "Do not repurpose copyrighted content without permission"
+    - "Flag potentially sensitive content for review before posting"
+
+  content_filters:
+    - political_statements
+    - brand_mentions
+    - personal_information
+    - financial_advice
+
+metadata:
+  version: "1.0.0"
+  author: "Neuron MCP Bridge"
+  created: "2026-09-05"
+  category: "content-operations"
+  complexity: "intermediate"

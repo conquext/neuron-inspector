@@ -1,0 +1,109 @@
+name: Email Outreach
+version: 1.0.0
+description: >
+  Opens Gmail or Outlook in the browser and sends personalized cold emails
+  using the logged-in session. No SMTP, no API keys. Researches each target,
+  finds personalization hooks, composes unique emails, and sends with human-like
+  pacing. Tracks open/reply rates and evolves subject line and body strategy.
+author: neuron
+tags: [email, outreach, gmail, outlook, cold-email, lead-gen]
+
+variables:
+  email_client:
+    prompt: "Which email client to use?"
+    options: [gmail, outlook]
+    default: gmail
+  subject_template:
+    prompt: "Subject line direction (not a template — a theme to follow)"
+    type: text
+    required: true
+    example: "Reference something specific from their company/work"
+  body_template:
+    prompt: "Email body direction (1-2 sentences describing the tone and structure, NOT a literal template)"
+    type: text
+    required: true
+    example: "Short, reference something specific, one clear ask, no 'hope this email finds you well' nonsense"
+  sender_name:
+    prompt: "Your name (for email signature)"
+    type: text
+    required: true
+    example: "Rasheed Alabi"
+  product_context:
+    prompt: "What are you reaching out about? Describe the product/service/opportunity in 2-3 sentences."
+    type: text
+    required: true
+    example: "LetsChop is a meal ordering app for Nigerian organizations — handles group food orders, vendor management, and delivery logistics."
+  audience_description:
+    prompt: "Who should you reach out to? Be specific about role, industry, location, problem they have."
+    type: text
+    required: true
+    example: "HR managers and office managers in Nigerian tech companies that deal with employee meal orders"
+  daily_cap:
+    prompt: "Max emails per day"
+    type: number
+    default: 15
+  session_cap:
+    prompt: "Max emails per session (run)"
+    type: number
+    default: 5
+  min_delay_seconds:
+    prompt: "Minimum seconds between emails"
+    type: number
+    default: 90
+  output_path:
+    prompt: "Where to save outreach logs"
+    type: path
+    default: "./email-outreach"
+  approval_mode:
+    prompt: "Review each email before sending, or auto-send after first 3?"
+    options: [review-all, auto-after-3]
+    default: review-all
+
+tools:
+  required:
+    - neuron_navigate
+    - neuron_find_elements
+    - neuron_type
+    - neuron_click
+    - neuron_scroll
+    - neuron_screenshot
+    - neuron_evaluate_js
+    - neuron_detect_blocker
+    - neuron_research_page
+    - neuron_monitor_action
+    - neuron_session_save
+    - neuron_session_load
+    - neuron_session_checkpoint
+  optional:
+    - neuron_open_tab
+    - neuron_extract_data
+    - neuron_snapshot_state
+    - neuron_diff_states
+    - neuron_search_traffic
+
+pipes:
+  outputs:
+    outreach_log:
+      format: yaml
+      path: "{{output_path}}/outreach-log.yaml"
+      description: "Running log of all emails sent — recipient, subject, body, timestamp, open/reply status"
+    email_drafts:
+      format: markdown
+      path: "{{output_path}}/drafts.md"
+      description: "Archive of all email drafts — subject lines and bodies that were sent"
+  inputs:
+    campaign_plan:
+      from: planner
+      output: plan
+      description: "Campaign plan with target list, timing strategy, and message approach"
+      optional: true
+    research_report:
+      from: web-researcher
+      output: report
+      description: "Research on target companies/individuals for personalization"
+      optional: true
+
+limits:
+  max_tabs: 3
+  max_duration_minutes: 45
+  require_human_approval: true

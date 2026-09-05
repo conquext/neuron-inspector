@@ -190,6 +190,71 @@ export const COMPOUND_TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "neuron_vision_act",
+    description:
+      "Take a screenshot of the page and describe what's visible, then perform an action based on " +
+      "visual understanding — no CSS selectors needed. The extension screenshots the viewport, the " +
+      "agent analyzes the image description, and issues click/type commands using element coordinates " +
+      "or best-match selectors. Use when you don't know the page structure or selectors keep breaking. " +
+      "Describe what you want to interact with in natural language.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tabId: { type: "number", description: "Chrome tab ID" },
+        instruction: {
+          type: "string",
+          description: "What to do, described visually (e.g. 'click the blue Send button', 'type in the search box at the top', 'scroll to the comments section')",
+        },
+        screenshot: { type: "boolean", description: "Return the screenshot for the AI to analyze (default: true)" },
+      },
+      required: ["tabId", "instruction"],
+    },
+  },
+  {
+    name: "neuron_approve_via_whatsapp",
+    description:
+      "Send an approval request to WhatsApp and wait for the response. Takes a screenshot of the " +
+      "current state, sends it with a prompt to a WhatsApp number, waits for approve/reject reply. " +
+      "Use instead of pausing for keyboard approval — the user approves from their phone. Requires " +
+      "a Neuron bot API key and the recipient's phone number.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tabId: { type: "number", description: "Chrome tab ID to screenshot (optional)" },
+        prompt: { type: "string", description: "The approval question (e.g. 'Send this message to John?')" },
+        phone: { type: "string", description: "WhatsApp phone number to send the approval request to (E.164 format)" },
+        api_key: { type: "string", description: "Neuron bot API key with 'nrn_' prefix" },
+        context: { type: "string", description: "Additional context (e.g. the full message text, the form data)" },
+        timeout_seconds: { type: "number", description: "How long to wait for a response (default: 120)" },
+      },
+      required: ["prompt", "phone", "api_key"],
+    },
+  },
+  {
+    name: "neuron_extract_to_json",
+    description:
+      "Extract structured data from a page and return it as clean JSON ready for piping to an API, " +
+      "spreadsheet, or file. Navigates to the URL, extracts data matching a schema you define, " +
+      "and returns normalized rows. Use for building data pipelines — scrape a page and push the " +
+      "data to a webhook, save as CSV, or append to a collection.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "Page URL to extract from" },
+        tabId: { type: "number", description: "Use existing tab (optional)" },
+        schema: {
+          type: "object",
+          description: "Expected output schema — keys are field names, values describe what to extract (e.g. {title: 'the post title', price: 'the price as a number', url: 'link to the item'})",
+        },
+        selector: { type: "string", description: "CSS selector for repeating items (optional — auto-detects)" },
+        pages: { type: "number", description: "Number of pages to paginate through (default: 1)" },
+        webhook_url: { type: "string", description: "POST extracted data to this URL as JSON (optional)" },
+        format: { type: "string", description: "Output format: 'json' (default), 'csv', 'yaml'" },
+      },
+      required: ["url"],
+    },
+  },
+  {
     name: "neuron_grab_media",
     description:
       "Extract and download video/audio from any page. Navigates to the URL, plays the media to " +
@@ -251,6 +316,12 @@ export async function handleCompoundTool(
       return auditPage(args, ctx);
     case "neuron_monitor_action":
       return monitorAction(args, ctx);
+    case "neuron_vision_act":
+      return visionAct(args, ctx);
+    case "neuron_approve_via_whatsapp":
+      return approveViaWhatsapp(args, ctx);
+    case "neuron_extract_to_json":
+      return extractToJson(args, ctx);
     case "neuron_grab_media":
       return grabMedia(args, ctx);
     case "neuron_grab_media_batch":
@@ -655,6 +726,282 @@ async function monitorAction(
     screenshot,
     diff,
     errors,
+  };
+}
+
+// ── Vision-based action ─────────────────────────────────────
+
+async function visionAct(
+  args: Record<string, unknown>,
+  ctx: BridgeContext,
+): Promise<unknown> {
+  const tabId = args.tabId as number;
+  const instruction = args.instruction as string;
+  const wantScreenshot = (args.screenshot as boolean) ?? true;
+
+  // Screenshot the page
+  let screenshot: unknown = null;
+  if (wantScreenshot) {
+    try {
+      screenshot = await call(ctx, "captureScreenshot", { tabId });
+    } catch { /* non-fatal */ }
+  }
+
+  // Get page structure for element mapping
+  const elements = await call(ctx, "findElements", {
+    tabId,
+    selectors: [
+      "button", "a", "input", "textarea", "select",
+      "[role='button']", "[role='link']", "[role='textbox']",
+      "[contenteditable='true']", "[onclick]",
+    ],
+    limit: 50,
+  });
+
+  // Get visible text blocks for context
+  const pageData = await call(ctx, "extractData", { tabId });
+
+  return {
+    tabId,
+    instruction,
+    screenshot,
+    interactive_elements: elements,
+    page_content: pageData,
+    hint: "Analyze the screenshot and interactive_elements to find what matches the instruction. " +
+          "Use the element selectors or text from interactive_elements to call neuron_click or neuron_type. " +
+          "If no exact match, try neuron_find_elements with descriptive text from the instruction.",
+  };
+}
+
+// ── WhatsApp approval ───────────────────────────────────────
+
+async function approveViaWhatsapp(
+  args: Record<string, unknown>,
+  ctx: BridgeContext,
+): Promise<unknown> {
+  const tabId = args.tabId as number | undefined;
+  const prompt = args.prompt as string;
+  const phone = args.phone as string;
+  const apiKey = args.api_key as string;
+  const context = args.context as string | undefined;
+  const timeoutSec = (args.timeout_seconds as number) ?? 120;
+
+  // Screenshot if tabId provided
+  let screenshotData: string | null = null;
+  if (tabId) {
+    try {
+      const ss = (await call(ctx, "captureScreenshot", { tabId })) as { dataUrl?: string } | unknown;
+      screenshotData = (ss as { dataUrl?: string })?.dataUrl ?? null;
+    } catch { /* non-fatal */ }
+  }
+
+  // Build the approval message
+  const fullPrompt = context
+    ? `${prompt}\n\n---\nContext:\n${context}`
+    : prompt;
+
+  // Send approval request via Neuron's approval API (HTTP from the bridge process)
+  const approvalPayload = {
+    apiKey,
+    to: phone,
+    prompt: fullPrompt,
+    context: context || undefined,
+    expiresInSeconds: timeoutSec,
+    callback: {
+      response: { schemes: ["keyword"] },
+    },
+  };
+
+  // Use the extension to make the HTTP call (it has the network context)
+  // Alternatively, make a direct fetch from the bridge process
+  try {
+    const response = await fetch("https://api.neuron.ng/api/v1/approvals", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(approvalPayload),
+    });
+
+    if (!response.ok) {
+      const errBody = await response.text();
+      return {
+        status: "approval_send_failed",
+        error: `HTTP ${response.status}: ${errBody}`,
+      };
+    }
+
+    const result = await response.json() as { data?: { id?: string } };
+    const approvalId = result?.data?.id;
+
+    if (!approvalId) {
+      return { status: "approval_send_failed", error: "No approval ID returned" };
+    }
+
+    // Poll for decision
+    const startTime = Date.now();
+    const pollInterval = 3000;
+
+    while (Date.now() - startTime < timeoutSec * 1000) {
+      await sleep(pollInterval);
+
+      try {
+        const pollResponse = await fetch(
+          `https://api.neuron.ng/api/v1/approvals/${approvalId}`,
+          {
+            headers: { "Authorization": `Bearer ${apiKey}` },
+          },
+        );
+
+        if (pollResponse.ok) {
+          const pollResult = await pollResponse.json() as {
+            data?: { status?: string; decision?: string; reason?: string };
+          };
+          const status = pollResult?.data?.status;
+
+          if (status === "approved" || status === "rejected") {
+            return {
+              status: status,
+              approval_id: approvalId,
+              decision: pollResult?.data?.decision,
+              reason: pollResult?.data?.reason,
+            };
+          }
+
+          if (status === "expired" || status === "cancelled") {
+            return { status: status, approval_id: approvalId };
+          }
+        }
+      } catch {
+        // Poll failure — retry
+      }
+    }
+
+    return {
+      status: "timeout",
+      approval_id: approvalId,
+      message: `No response within ${timeoutSec} seconds`,
+    };
+  } catch (err) {
+    return {
+      status: "error",
+      error: (err as Error).message,
+    };
+  }
+}
+
+// ── Data pipeline extraction ────────────────────────────────
+
+async function extractToJson(
+  args: Record<string, unknown>,
+  ctx: BridgeContext,
+): Promise<unknown> {
+  const url = args.url as string;
+  const schema = args.schema as Record<string, string> | undefined;
+  const extractSel = args.selector as string | undefined;
+  const maxPages = (args.pages as number) ?? 1;
+  const webhookUrl = args.webhook_url as string | undefined;
+  const format = (args.format as string) ?? "json";
+
+  // Navigate and extract using search_and_collect for multi-page
+  let tabId = args.tabId as number | undefined;
+  if (!tabId) {
+    const tab = (await call(ctx, "openTab", { url })) as { tabId?: number };
+    tabId = tab?.tabId;
+    await sleep(2500);
+  } else {
+    await call(ctx, "navigateTo", { tabId, url });
+    await sleep(2500);
+  }
+
+  if (!tabId) throw new Error("Failed to open tab");
+
+  // Collect data across pages
+  const allItems: unknown[] = [];
+
+  for (let page = 0; page < maxPages; page++) {
+    // Scroll to load lazy content
+    for (let i = 0; i < 3; i++) {
+      await call(ctx, "scrollPage", { tabId, deltaY: 600, smooth: true });
+      await sleep(400);
+    }
+
+    const extractArgs: Record<string, unknown> = { tabId };
+    if (extractSel) extractArgs.selector = extractSel;
+    const pageData = await call(ctx, "extractData", extractArgs);
+
+    const items = Array.isArray(pageData)
+      ? pageData
+      : (pageData as { items?: unknown[] })?.items ?? [pageData];
+    allItems.push(...items);
+
+    // Paginate if needed
+    if (page < maxPages - 1) {
+      try {
+        await call(ctx, "clickElement", {
+          tabId,
+          selectors: [
+            "button[aria-label='Next']", "a[aria-label='Next']",
+            ".pagination-next", "[data-test='pagination-next']",
+            "a:has-text('Next')", "button:has-text('Next')",
+          ],
+        });
+        await sleep(2000);
+      } catch {
+        break;
+      }
+    }
+  }
+
+  // Format output
+  let output: unknown;
+  if (format === "csv" && allItems.length > 0) {
+    const firstItem = allItems[0] as Record<string, unknown>;
+    const headers = Object.keys(firstItem);
+    const csvRows = [headers.join(",")];
+    for (const item of allItems) {
+      const row = headers.map((h) => {
+        const val = String((item as Record<string, unknown>)[h] ?? "");
+        return val.includes(",") || val.includes('"') ? `"${val.replace(/"/g, '""')}"` : val;
+      });
+      csvRows.push(row.join(","));
+    }
+    output = csvRows.join("\n");
+  } else if (format === "yaml") {
+    // Simple YAML-ish output
+    output = allItems.map((item, i) => {
+      const entries = Object.entries(item as Record<string, unknown>);
+      return `- # item ${i + 1}\n` + entries.map(([k, v]) => `  ${k}: ${JSON.stringify(v)}`).join("\n");
+    }).join("\n");
+  } else {
+    output = allItems;
+  }
+
+  // Send to webhook if specified
+  let webhookResult: unknown = null;
+  if (webhookUrl) {
+    try {
+      const res = await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: url, extracted_at: new Date().toISOString(), items: allItems }),
+      });
+      webhookResult = { status: res.status, ok: res.ok };
+    } catch (err) {
+      webhookResult = { error: (err as Error).message };
+    }
+  }
+
+  return {
+    url,
+    tabId,
+    format,
+    total_items: allItems.length,
+    pages_collected: Math.min(maxPages, 1),
+    data: output,
+    schema_hint: schema ?? null,
+    webhook: webhookResult,
   };
 }
 
