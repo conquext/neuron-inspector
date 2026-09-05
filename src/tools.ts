@@ -199,6 +199,17 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "neuron_focus_tab",
+    description: "Bring a tab to the foreground. Required before clicking, typing, or screenshotting on sites that need foreground focus (LinkedIn, Gmail, Facebook). Automatically focuses the tab's window too.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tabId: { type: "number", description: "Chrome tab ID to focus" },
+      },
+      required: ["tabId"],
+    },
+  },
+  {
     name: "neuron_open_tab",
     description: "Open a new tab, optionally to a URL",
     inputSchema: {
@@ -616,6 +627,7 @@ export function toolToPrimitive(toolName: string): string {
     neuron_click: "clickElement",
     neuron_type: "typeText",
     neuron_navigate: "navigateTo",
+    neuron_focus_tab: "focusTab",
     neuron_open_tab: "openTab",
     neuron_reload: "reloadTab",
     neuron_scroll: "scrollPage",

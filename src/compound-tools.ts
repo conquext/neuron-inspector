@@ -30,6 +30,12 @@ async function call(
   return ctx.pending.call(ctx.ws, primitive, args, timeoutMs);
 }
 
+/** Focus a tab before interacting — required for LinkedIn, Gmail, Facebook. */
+async function ensureFocused(ctx: BridgeContext, tabId: number): Promise<void> {
+  await call(ctx, "focusTab", { tabId });
+  await sleep(300); // give the tab time to render in foreground
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -556,6 +562,9 @@ async function fillAndSubmit(
   const wantScreenshot = (args.screenshot as boolean) ?? true;
   const delayMs = (args.delayMs as number) ?? 200;
 
+  // Focus the tab before interacting — LinkedIn/Gmail need foreground
+  await ensureFocused(ctx, tabId);
+
   // Snapshot before
   await call(ctx, "snapshotState", { tabId, label: "pre-fill" });
 
@@ -674,6 +683,9 @@ async function monitorAction(
   };
   const waitMs = (args.waitMs as number) ?? 1500;
   const wantScreenshot = (args.screenshot as boolean) ?? true;
+
+  // Focus the tab before interacting
+  await ensureFocused(ctx, tabId);
 
   // Snapshot before
   await call(ctx, "snapshotState", { tabId, label: "before-action" });
