@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { WebSocketServer, WebSocket } from "ws";
 import { PendingCalls } from "./correlation.js";
 import { TOOLS, toolToPrimitive } from "./tools.js";
+import { RECIPE_TOOLS, handleRecipeTool } from "./recipe-tools.js";
 
 const PORT = parseInt(process.env.NEURON_BRIDGE_PORT ?? "7377", 10);
 
@@ -49,10 +50,10 @@ console.error(`[bridge] WebSocket server listening on 127.0.0.1:${PORT}`);
 
 const mcp = new McpServer({
   name: "neuron-inspector",
-  version: "0.1.1",
+  version: "0.2.0",
 });
 
-// Register all tools
+// Browser tools (forwarded to extension via WebSocket)
 for (const tool of TOOLS) {
   mcp.tool(tool.name, tool.description, tool.inputSchema, async (args) => {
     if (!extensionWs || extensionWs.readyState !== WebSocket.OPEN) {
@@ -77,12 +78,27 @@ for (const tool of TOOLS) {
   });
 }
 
+// Recipe tools (local, no extension needed)
+for (const tool of RECIPE_TOOLS) {
+  mcp.tool(tool.name, tool.description, tool.inputSchema, async (args) => {
+    try {
+      const result = await handleRecipeTool(tool.name, args as Record<string, unknown>);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      };
+    }
+  });
+}
+
 // ── Start ────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await mcp.connect(transport);
-  console.error("[bridge] MCP server ready on stdio");
+  console.error(`[bridge] MCP server ready on stdio (${TOOLS.length} browser + ${RECIPE_TOOLS.length} recipe tools)`);
 }
 
 main().catch((err) => {
