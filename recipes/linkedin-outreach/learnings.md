@@ -1,6 +1,22 @@
 # Learnings
 
-No messages sent yet. This file updates after 20+ messages with 8+ response outcomes.
+Updated 2026-09-05 after first live LinkedIn test.
+
+## CRITICAL: LinkedIn Send Limitation
+
+**The agent cannot press Send on LinkedIn.** LinkedIn's CSP blocks `unsafe-eval`, so keyboard event dispatch via `neuron_evaluate_js` fails. The `\n` character inserts literal text instead of triggering Enter-to-send. The send button doesn't exist in "Enter to Send" mode.
+
+**What works:** Navigate to messaging, open conversations, read messages, type replies into the compose box.
+
+**What doesn't:** Pressing Send. The message sits in the compose box waiting for the user to press Enter.
+
+**Approved workflow:** The agent composes the message, screenshots it for review, then tells the user to press Enter. This is actually better for the approval gate — the user sees the exact message before it sends.
+
+**Verified selectors:**
+- `.msg-conversation-listitem__link` — conversation list items
+- `.msg-form__contenteditable` — message compose box
+- `texts: ["Person Name"]` — clicking to open a specific conversation
+- `button.msg-form__send-toggle` — send mode toggle (but dropdown needs foreground)
 
 ## Message Defaults
 
