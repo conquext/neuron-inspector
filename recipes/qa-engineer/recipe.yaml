@@ -1,0 +1,95 @@
+name: QA Engineer
+version: 1.0.0
+description: >
+  Tests web applications like a senior QA engineer. Explores pages, finds bugs,
+  checks accessibility, audits security, validates forms, tests edge cases, and
+  produces structured bug reports. Builds a regression library over time.
+author: neuron
+tags: [testing, qa, bugs, accessibility, security, automation]
+
+variables:
+  target_url:
+    prompt: "Base URL of the app to test"
+    type: text
+    required: true
+    example: "https://staging.myapp.com"
+  focus_areas:
+    prompt: "What to focus on (comma-separated, or 'all')"
+    type: text
+    default: "all"
+    example: "forms, auth flow, checkout, dashboard"
+  severity_threshold:
+    prompt: "Minimum severity to report"
+    options: [critical, high, medium, low, info]
+    default: low
+  output_path:
+    prompt: "Where to save bug reports"
+    type: path
+    default: "./qa-reports"
+  auth_required:
+    prompt: "Does the app require login?"
+    options: ["yes", "no"]
+    default: "no"
+  auth_url:
+    prompt: "Login page URL (if auth required)"
+    type: text
+    default: ""
+  test_credentials:
+    prompt: "Test account credentials (user:pass, or leave blank to use logged-in session)"
+    type: text
+    default: ""
+
+tools:
+  required:
+    - neuron_navigate
+    - neuron_find_elements
+    - neuron_click
+    - neuron_type
+    - neuron_scroll
+    - neuron_screenshot
+    - neuron_evaluate_js
+    - neuron_get_errors
+    - neuron_a11y_audit
+    - neuron_security_scan
+    - neuron_perf_snapshot
+    - neuron_extract_data
+    - neuron_snapshot_state
+    - neuron_diff_states
+  optional:
+    - neuron_set_mock
+    - neuron_clear_mocks
+    - neuron_get_requests
+    - neuron_search_traffic
+    - neuron_seo_audit
+    - neuron_get_cookies
+    - neuron_get_storage
+    - neuron_watch_element
+    - neuron_get_watches
+    - neuron_stop_watch
+    - neuron_replay_request
+    - neuron_waterfall
+    - neuron_detect_blocker
+    - neuron_list_tabs
+    - neuron_open_tab
+
+pipes:
+  outputs:
+    bug_report:
+      format: markdown
+      path: "{{output_path}}/{{date}}-report.md"
+      description: "Full QA report with bugs, screenshots, and recommendations"
+    regression_suite:
+      format: yaml
+      path: "{{output_path}}/regressions.yaml"
+      description: "Known bugs to re-check on future runs"
+  inputs:
+    previous_report:
+      from: qa-engineer
+      output: bug_report
+      description: "Previous report — re-check if old bugs are fixed"
+      optional: true
+
+limits:
+  max_tabs: 3
+  max_duration_minutes: 30
+  require_human_approval: false

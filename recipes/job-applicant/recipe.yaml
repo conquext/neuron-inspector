@@ -1,0 +1,87 @@
+name: Job Applicant
+version: 1.0.0
+description: >
+  Navigates job boards, reads postings, matches them against your profile,
+  tailors cover letters, fills application forms, and tracks submissions.
+  Learns which approaches get responses and adjusts over time.
+author: neuron
+tags: [jobs, applications, career, automation]
+
+variables:
+  resume_path:
+    prompt: "Path to your resume (PDF, MD, or TXT)"
+    type: path
+    required: true
+  target_roles:
+    prompt: "Roles you're targeting (comma-separated)"
+    type: text
+    required: true
+    example: "Senior Backend Engineer, Platform Engineer, Staff Engineer"
+  locations:
+    prompt: "Preferred locations (comma-separated, or 'remote')"
+    type: text
+    default: "remote"
+  salary_min:
+    prompt: "Minimum salary (number, or leave blank)"
+    type: text
+    default: ""
+  deal_breakers:
+    prompt: "Automatic disqualifiers (comma-separated)"
+    type: text
+    default: ""
+    example: "no equity, requires clearance, unpaid trial"
+  cover_letter_tone:
+    prompt: "Cover letter tone"
+    options: [professional, conversational, technical]
+    default: professional
+  job_boards:
+    prompt: "Job boards to search"
+    default: "linkedin.com/jobs, indeed.com, greenhouse.io, lever.co"
+  output_path:
+    prompt: "Where to save application records"
+    type: path
+    default: "./applications"
+  auto_submit:
+    prompt: "Auto-submit applications, or pause for review?"
+    options: [auto, review]
+    default: review
+
+tools:
+  required:
+    - neuron_navigate
+    - neuron_extract_data
+    - neuron_find_elements
+    - neuron_type
+    - neuron_click
+    - neuron_scroll
+    - neuron_screenshot
+    - neuron_list_tabs
+  optional:
+    - neuron_evaluate_js
+    - neuron_open_tab
+    - neuron_search_traffic
+    - neuron_detect_blocker
+    - neuron_snapshot_state
+    - neuron_diff_states
+
+pipes:
+  outputs:
+    applications_log:
+      format: yaml
+      path: "{{output_path}}/applications.yaml"
+      description: "Running log of all applications submitted"
+    cover_letters:
+      format: markdown
+      path: "{{output_path}}/covers/{{company_slug}}-{{date}}.md"
+      description: "Generated cover letters for review and reuse"
+  inputs:
+    company_research:
+      from: web-researcher
+      output: report
+      description: "Research on target company — used to tailor cover letters and anticipate interview questions"
+      optional: true
+
+limits:
+  max_tabs: 5
+  max_duration_minutes: 60
+  require_human_approval: true

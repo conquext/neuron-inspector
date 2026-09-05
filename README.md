@@ -220,6 +220,36 @@ The agent calls `neuron_perf_snapshot` and gets back Core Web Vitals, render-blo
 
 ---
 
+## Recipes — purpose-built agents
+
+The 51 tools are primitives. A **recipe** turns them into a purpose-built agent — a QA engineer, a job applicant, a web researcher. Recipes are shareable, and they get better with every run.
+
+### Built-in recipes
+
+| Recipe | What it does |
+|--------|-------------|
+| **[Web Researcher](recipes/web-researcher/)** | Deep-dives into topics, cross-references sources, produces reports with citations |
+| **[Job Applicant](recipes/job-applicant/)** | Searches job boards, evaluates fit, writes cover letters, fills forms, tracks outcomes |
+| **[QA Engineer](recipes/qa-engineer/)** | Tests web apps — finds bugs, checks a11y, audits security, builds regression suites |
+
+### How recipes work
+
+A recipe is a folder with instructions (`agent.md`) and config (`recipe.yaml`). The instructions tell the AI *how* to use the browser tools for a specific purpose. The config declares variables you fill in (your resume, your target URL, your preferences).
+
+**Recipes are alive.** Each run captures outcomes to `memory/`. After enough runs, the agent reviews what worked and updates its own strategy in `learnings.md`. A job applicant that discovers technical-tone cover letters get 3x more responses will start writing technical-tone cover letters by default.
+
+**Recipes feed each other.** The web researcher produces reports that the job applicant reads to tailor cover letters. The QA engineer reads its own previous reports to re-check if old bugs are fixed. Output from one recipe is input to another.
+
+### Use a recipe
+
+Copy a recipe's `agent.md` into your project as a CLAUDE.md (or append it), fill in the `{{variables}}` from `recipe.yaml`, and run. The recipe tells your AI agent exactly how to use the 51 tools for that purpose.
+
+### Build your own
+
+See [RECIPE-SPEC.md](RECIPE-SPEC.md) for the full format. The core idea: write the instructions you'd give a skilled human, reference the tools by name, add reflect/evolve sections so the agent improves itself, and declare your variables so others can import and customize.
+
+---
+
 ## Requirements
 
 - Node.js 18+
@@ -230,6 +260,7 @@ The agent calls `neuron_perf_snapshot` and gets back Core Web Vitals, render-blo
 
 - **Extension download:** [neuron.ng/extension](https://neuron.ng/extension)
 - **npm:** [npmjs.com/package/neuron-inspector](https://www.npmjs.com/package/neuron-inspector)
+- **Recipe spec:** [RECIPE-SPEC.md](RECIPE-SPEC.md)
 
 ## License
 

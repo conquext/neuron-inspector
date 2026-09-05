@@ -1,3 +1,7 @@
 node_modules/
 dist/
 *.tgz
+# Recipe memory is local-only — outcomes, not shared
+recipes/*/memory/
+# User-specific variable files
+.env.recipe
