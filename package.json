@@ -1,6 +1,6 @@
 {
   "name": "neuron-inspector",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "91 tools for AI agents. Turn Chrome into an MCP server — inspect DOM, automate clicks, audit security, mock APIs, extract data, download videos, schedule agents, monitor pages, self-improving recipes.",
   "type": "module",
   "main": "dist/server.js",

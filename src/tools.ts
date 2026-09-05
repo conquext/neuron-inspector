@@ -199,6 +199,19 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "neuron_press_key",
+    description: "Press a keyboard key (Enter, Tab, Escape, Backspace, Space) on the focused element or a targeted element. Dispatches real KeyboardEvent (keydown + keypress + keyup) which triggers framework event handlers that CDP text insertion misses. Use after neuron_type to press Enter on LinkedIn's send-on-enter, submit forms, or dismiss dialogs.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tabId: { type: "number", description: "Chrome tab ID" },
+        key: { type: "string", description: "Key to press: Enter, Tab, Escape, Backspace, Space" },
+        selectors: { type: "array", items: { type: "string" }, description: "CSS selectors to focus before pressing (optional — uses currently focused element if omitted)" },
+      },
+      required: ["tabId", "key"],
+    },
+  },
+  {
     name: "neuron_focus_tab",
     description: "Bring a tab to the foreground. Required before clicking, typing, or screenshotting on sites that need foreground focus (LinkedIn, Gmail, Facebook). Automatically focuses the tab's window too.",
     inputSchema: {
@@ -627,6 +640,7 @@ export function toolToPrimitive(toolName: string): string {
     neuron_click: "clickElement",
     neuron_type: "typeText",
     neuron_navigate: "navigateTo",
+    neuron_press_key: "pressKey",
     neuron_focus_tab: "focusTab",
     neuron_open_tab: "openTab",
     neuron_reload: "reloadTab",
