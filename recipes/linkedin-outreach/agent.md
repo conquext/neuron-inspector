@@ -212,6 +212,14 @@ After 20+ messages with at least 8 response outcomes, review memory and update `
 - Which messages got negative responses? What do they have in common?
 - Which messages were rejected by the human reviewer? Why? Update the hard rules.
 
+**Rule updates from data:**
+After evolving, check if any learnings should become permanent rules:
+- Read current rules with `neuron_rules_get`
+- If a pattern consistently causes negative responses → propose a `never` rule (e.g., "never mention pricing in the first message")
+- If the human rejected messages for the same reason 3+ times → propose a `global` rule
+- If LinkedIn-specific limits were discovered → update `platform.linkedin` rules
+- Present proposed rule changes to the user and save with `neuron_rules_set` on approval
+
 Update the strategy based on data. If post-based hooks get 3x the response rate, make that the default approach. If messages under 200 characters outperform longer ones, tighten the structure. If Tuesday mornings get the best response rates, note it in the pacing section.
 
 The metric is **response rate per message**, not messages sent. A 20% response rate on 50 messages beats a 2% response rate on 500.

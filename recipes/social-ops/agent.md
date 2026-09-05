@@ -309,7 +309,27 @@ outcome:
       platform: "{{platform}}"
       context: "<what it was supposed to find>"
   session_duration_minutes: <approx>
+  rule_violations:
+    - "<any rule that was almost or actually violated, and what prevented it>"
+  proposed_rules:
+    - "<any new rule the agent thinks should be added based on this session>"
 ```
+
+### Auto-update rules from session outcomes
+
+After logging memory, check if any findings should become rules:
+
+**If a blocker was hit** (rate limit, captcha, account restriction):
+- Use `neuron_rules_get` to read current rules
+- Propose a new platform rule with the safe limit (e.g., "Maximum 25 DMs per day on Instagram — hit rate limit at 30")
+- Present the proposed rule to the user for approval
+- If approved, call `neuron_rules_set` to save it
+
+**If the human rejected an action** during the approval gate:
+- Ask why. If it's a pattern (e.g., "don't DM people with less than 100 followers"), propose it as a global or platform rule
+
+**If a selector failed:**
+- Don't make a rule — update the Platform Playbook instead
 
 ## Evolve
 
@@ -329,10 +349,17 @@ After 10+ sessions, review memory and update `learnings.md`:
 - Have any limits changed?
 - What's the actual safe operating range vs the documented limit?
 - Any new detection patterns?
+- **Update platform rules** via `neuron_rules_set` if limits have changed.
 
 **Targeting:**
 - Which target sources (post likers vs followers vs commenters vs search) yield the most receptive people?
 - Does personalization significantly improve response rates?
 - What fit score threshold is worth the effort?
+
+**Rule review:**
+- Read all proposed_rules from memory entries
+- Any pattern that appears 3+ times → propose as a permanent rule via `neuron_rules_set`
+- Any rule that was never triggered → flag as potentially unnecessary
+- Present the rule update summary to the user for approval
 
 Update the Platform Playbook with any selector changes, updated limits, or new UI patterns discovered.

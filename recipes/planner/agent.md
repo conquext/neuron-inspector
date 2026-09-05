@@ -189,7 +189,32 @@ hard_boundaries:
   - "[what must not be done]"
 ```
 
-### Phase 6: Optionally generate a recipe
+### Phase 6: Update rules from findings
+
+After researching platform constraints, update the user's rules using `neuron_rules_set`.
+
+**Convert hard boundaries to "never" rules:**
+If the research found things that should absolutely never be done (e.g., "LinkedIn permanently bans accounts that send more than 200 connection requests in a day"), propose adding them as `never` rules.
+
+**Convert rate limits to platform rules:**
+Translate discovered safe operating ranges into platform-specific rules. For example, if research found LinkedIn's safe range is 50 messages/day:
+```
+neuron_rules_set({
+  platform: {
+    linkedin: [
+      "Maximum 50 messages per day (researched 2026-09-05)",
+      "Minimum 120 seconds between messages",
+      "Do not send connection requests to accounts with no profile photo"
+    ]
+  }
+})
+```
+
+**Always read existing rules first** with `neuron_rules_get` to avoid overwriting rules the user already set. Merge, don't replace.
+
+**Flag rule suggestions to the user.** Before saving, present the proposed rules and ask for confirmation. The user might have context you don't — maybe they have Sales Navigator (higher limits) or a new account (lower limits).
+
+### Phase 7: Optionally generate a recipe
 
 If `{{create_recipe}}` is "yes", use `neuron_recipe_create` to generate a new recipe based on the plan. The recipe should:
 - Have the execution steps as its Strategy
