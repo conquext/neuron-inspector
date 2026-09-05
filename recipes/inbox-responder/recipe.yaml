@@ -1,0 +1,82 @@
+name: Inbox Responder
+version: 1.0.0
+description: >
+  Watches your inboxes (LinkedIn, Gmail, X, Instagram DMs) for new messages,
+  drafts context-aware replies, sends them to your WhatsApp for approval, and
+  sends the reply on approval. Runs on a schedule — check every N minutes,
+  draft, approve from your phone, done.
+author: neuron
+tags: [inbox, auto-reply, whatsapp-approval, linkedin, gmail, x, instagram, monitoring]
+
+variables:
+  inboxes:
+    prompt: "Which inboxes to watch (comma-separated)"
+    type: text
+    required: true
+    example: "linkedin, gmail"
+  check_interval_minutes:
+    prompt: "How often to check for new messages (minutes)"
+    type: number
+    default: 10
+  approval_phone:
+    prompt: "Your WhatsApp number for approval requests (E.164 format)"
+    type: text
+    required: true
+    example: "+2348012345678"
+  neuron_api_key:
+    prompt: "Neuron bot API key (nrn_...) for sending WhatsApp approvals"
+    type: text
+    required: true
+  reply_style:
+    prompt: "How should replies be written?"
+    options: [match-their-tone, professional, casual, brief]
+    default: match-their-tone
+  auto_skip:
+    prompt: "Messages to skip (comma-separated keywords or patterns)"
+    type: text
+    default: "newsletter, no-reply, noreply, automated, unsubscribe"
+  context_notes:
+    prompt: "Context about you that helps draft better replies (role, company, current priorities)"
+    type: text
+    default: ""
+  gmail_url:
+    prompt: "Gmail URL"
+    type: text
+    default: "https://mail.google.com/mail/u/0/#inbox"
+  output_path:
+    prompt: "Where to save response logs"
+    type: path
+    default: "./inbox-responses"
+
+tools:
+  required:
+    - neuron_navigate
+    - neuron_focus_tab
+    - neuron_extract_data
+    - neuron_find_elements
+    - neuron_type
+    - neuron_press_key
+    - neuron_click
+    - neuron_scroll
+    - neuron_screenshot
+    - neuron_evaluate_js
+    - neuron_list_tabs
+    - neuron_get_errors
+    - neuron_research_page
+    - neuron_approve_via_whatsapp
+    - neuron_session_save
+    - neuron_session_load
+    - neuron_session_checkpoint
+    - neuron_schedule_recipe
+
+pipes:
+  outputs:
+    response_log:
+      format: yaml
+      path: "{{output_path}}/response-log.yaml"
+      description: "Log of all messages received, drafts sent for approval, and responses sent"
+
+limits:
+  max_tabs: 4
+  max_duration_minutes: 15
+  require_human_approval: true
