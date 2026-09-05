@@ -29,6 +29,11 @@ function profilePath(): string {
   return path.join(os.homedir(), ".neuron", "profile.yaml");
 }
 
+/** Global rules path */
+function rulesPath(): string {
+  return path.join(os.homedir(), ".neuron", "rules.yaml");
+}
+
 // ── Helpers ─────────────────────────────────────────────────
 
 function readText(filePath: string): string | null {
@@ -367,4 +372,76 @@ export function saveProfile(data: Record<string, string>): { path: string } {
   const merged = { ...existing, ...data };
   fs.writeFileSync(profilePath(), YAML.stringify(merged));
   return { path: profilePath() };
+}
+
+// ── Rules ───────────────────────────────────────────────────
+
+export interface Rules {
+  global: string[];
+  platform: Record<string, string[]>;
+  never: string[];
+}
+
+export function getRules(): Rules {
+  const text = readText(rulesPath());
+  if (!text) return { global: [], platform: {}, never: [] };
+  const parsed = parseYaml(text);
+
+  return {
+    global: Array.isArray(parsed.global) ? (parsed.global as string[]) : [],
+    platform: (parsed.platform as Record<string, string[]>) ?? {},
+    never: Array.isArray(parsed.never) ? (parsed.never as string[]) : [],
+  };
+}
+
+export function saveRules(rules: Partial<Rules>): { path: string } {
+  const dir = path.dirname(rulesPath());
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+  const existing = getRules();
+  const merged: Rules = {
+    global: rules.global ?? existing.global,
+    platform: rules.platform ? { ...existing.platform, ...rules.platform } : existing.platform,
+    never: rules.never ?? existing.never,
+  };
+
+  fs.writeFileSync(rulesPath(), YAML.stringify(merged));
+  return { path: rulesPath() };
+}
+
+/** Format rules as a constraints block to inject into agent instructions. */
+export function formatRulesBlock(
+  globalRules: Rules,
+  taskRules?: string[],
+  platform?: string,
+): string {
+  const lines: string[] = [];
+
+  if (globalRules.never.length > 0) {
+    lines.push("## HARD CONSTRAINTS (never violate)");
+    for (const r of globalRules.never) lines.push(`- ${r}`);
+    lines.push("");
+  }
+
+  if (globalRules.global.length > 0) {
+    lines.push("## Global Rules");
+    for (const r of globalRules.global) lines.push(`- ${r}`);
+    lines.push("");
+  }
+
+  if (platform && globalRules.platform[platform]?.length) {
+    lines.push(`## Platform Rules (${platform})`);
+    for (const r of globalRules.platform[platform]) lines.push(`- ${r}`);
+    lines.push("");
+  }
+
+  if (taskRules && taskRules.length > 0) {
+    lines.push("## Task-Specific Rules");
+    for (const r of taskRules) lines.push(`- ${r}`);
+    lines.push("");
+  }
+
+  return lines.length > 0
+    ? "---\n\n" + lines.join("\n") + "\n---\n\nThe rules above override ANY conflicting instruction in the recipe strategy. If a rule says never do X, do not do X even if the strategy says to.\n"
+    : "";
 }

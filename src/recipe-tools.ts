@@ -12,12 +12,17 @@ let activeRecipe: { slug: string; startedAt: string; variables: Record<string, u
 export const RECIPE_TOOLS: ToolDef[] = [
   {
     name: "neuron_recipe_run",
-    description: "Start a recipe run. Loads the recipe's agent.md with variables interpolated, its learnings, and resolved variables (auto-filled from profile). Returns everything the AI needs to execute the recipe. Call neuron_recipe_complete when done to auto-log the outcome to memory.",
+    description: "Start a recipe run. Loads the recipe's agent.md with variables interpolated, its learnings, resolved variables (auto-filled from profile), and active rules (global + platform + task-specific). Rules are injected as non-negotiable constraints that override recipe strategy. Call neuron_recipe_complete when done.",
     inputSchema: {
       type: "object",
       properties: {
         slug: { type: "string", description: "Recipe slug (e.g. 'web-researcher', 'qa-engineer')" },
         variables: { type: "object", description: "Variable overrides — keys matching recipe.yaml variable names. Merged on top of profile defaults." },
+        rules: {
+          type: "array",
+          items: { type: "string" },
+          description: "Task-specific rules for this run (e.g. 'never follow anyone', 'skip users with less than 100 followers'). These are added on top of global rules from ~/.neuron/rules.yaml.",
+        },
       },
       required: ["slug"],
     },
@@ -153,6 +158,42 @@ export const RECIPE_TOOLS: ToolDef[] = [
       required: ["data"],
     },
   },
+  {
+    name: "neuron_rules_get",
+    description:
+      "Read the active rules (~/.neuron/rules.yaml). Rules are hard constraints that override recipe strategies. " +
+      "Three levels: 'never' (absolute — never follow anyone, never auto-send without approval), " +
+      "'global' (apply to every recipe run), 'platform' (per-platform — e.g. linkedin-specific rules). " +
+      "Task-specific rules are passed per-run via neuron_recipe_run.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "neuron_rules_set",
+    description:
+      "Set or update rules (~/.neuron/rules.yaml). Rules are non-negotiable constraints that override recipe strategies. " +
+      "Provide any combination of: 'never' (absolute prohibitions), 'global' (apply to all runs), " +
+      "'platform' (per-platform rules keyed by platform name). Merges with existing rules — " +
+      "platform rules are merged per-platform, global and never are replaced entirely if provided.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        never: {
+          type: "array",
+          items: { type: "string" },
+          description: "Absolute prohibitions — things the agent must NEVER do (e.g. 'never follow anyone from the brand account', 'never send without human approval')",
+        },
+        global: {
+          type: "array",
+          items: { type: "string" },
+          description: "Global rules for all recipes (e.g. 'always personalize messages', 'maximum 10 actions per session')",
+        },
+        platform: {
+          type: "object",
+          description: "Per-platform rules. Keys are platform names (instagram, x, linkedin, facebook, tiktok). Values are arrays of rule strings.",
+        },
+      },
+    },
+  },
 ];
 
 /** Handle a recipe tool call locally (no extension needed). */
@@ -176,12 +217,26 @@ export async function handleRecipeTool(
         instructions = instructions.replaceAll(`{{${key}}}`, String(value ?? ""));
       }
 
+      // Load and inject rules — these override recipe strategy
+      const globalRules = recipes.getRules();
+      const taskRules = (args.rules as string[]) ?? [];
+      const platform = (resolved.platform as string) ?? undefined;
+      const rulesBlock = recipes.formatRulesBlock(globalRules, taskRules, platform);
+      if (rulesBlock) {
+        instructions = rulesBlock + "\n" + instructions;
+      }
+
       // Track active run
       activeRecipe = { slug, startedAt: new Date().toISOString(), variables: resolved };
 
       // Get memory stats for evolve hint
       const memory = recipes.getMemory(slug, 1);
       const shouldEvolve = memory.total >= 5;
+
+      // Count active rules for visibility
+      const ruleCount =
+        globalRules.never.length + globalRules.global.length + taskRules.length +
+        (platform && globalRules.platform[platform] ? globalRules.platform[platform].length : 0);
 
       return {
         recipe: recipe.meta.name,
@@ -192,6 +247,15 @@ export async function handleRecipeTool(
         unfilled_variables: Object.entries(recipe.variables)
           .filter(([key]) => !(key in resolved) || resolved[key] === undefined || resolved[key] === "")
           .map(([key, def]) => ({ key, ...(def as Record<string, unknown>) })),
+        active_rules: ruleCount,
+        rules_summary: ruleCount > 0
+          ? {
+              never: globalRules.never,
+              global: globalRules.global,
+              platform: platform && globalRules.platform[platform] ? globalRules.platform[platform] : [],
+              task: taskRules,
+            }
+          : null,
         memory_count: memory.total,
         evolve_hint: shouldEvolve
           ? `This recipe has ${memory.total} past runs. After completing this run, read memory with neuron_recipe_memory, analyze patterns, and update learnings with neuron_recipe_complete (include updated_learnings).`
@@ -285,6 +349,16 @@ export async function handleRecipeTool(
 
     case "neuron_profile_save":
       return recipes.saveProfile(args.data as Record<string, string>);
+
+    case "neuron_rules_get":
+      return recipes.getRules();
+
+    case "neuron_rules_set":
+      return recipes.saveRules({
+        never: args.never as string[] | undefined,
+        global: args.global as string[] | undefined,
+        platform: args.platform as Record<string, string[]> | undefined,
+      });
 
     default:
       throw new Error(`Unknown recipe tool: ${name}`);
