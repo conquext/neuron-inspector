@@ -1,9 +1,46 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { WebSocketServer, WebSocket } from "ws";
+import { z, type ZodTypeAny } from "zod";
 import { PendingCalls } from "./correlation.js";
 import { TOOLS, toolToPrimitive } from "./tools.js";
 import { RECIPE_TOOLS, handleRecipeTool } from "./recipe-tools.js";
+import { COMPOUND_TOOLS, handleCompoundTool } from "./compound-tools.js";
+
+// ── JSON-schema → Zod raw shape ──────────────────────────────
+// The tool defs describe params as JSON schema; the MCP SDK (v1.30+) requires a
+// Zod raw shape at registration. Convert here so the tool defs stay declarative.
+type JsonProp = { type?: string; description?: string; enum?: string[]; items?: JsonProp; properties?: Record<string, JsonProp>; required?: string[] };
+
+function propToZod(p: JsonProp): ZodTypeAny {
+  let zt: ZodTypeAny;
+  if (Array.isArray(p?.enum) && p.enum.length > 0) {
+    zt = z.enum(p.enum as [string, ...string[]]);
+  } else {
+    switch (p?.type) {
+      case "number":
+      case "integer": zt = z.number(); break;
+      case "boolean": zt = z.boolean(); break;
+      case "array": zt = z.array(p.items ? propToZod(p.items) : z.any()); break;
+      case "object": zt = p.properties ? z.object(shapeFromSchema(p)) : z.record(z.string(), z.any()); break;
+      case "string": zt = z.string(); break;
+      default: zt = z.any();
+    }
+  }
+  if (p?.description) zt = zt.describe(p.description);
+  return zt;
+}
+
+function shapeFromSchema(schema: JsonProp): Record<string, ZodTypeAny> {
+  const props = schema?.properties ?? {};
+  const required = Array.isArray(schema?.required) ? schema.required : [];
+  const shape: Record<string, ZodTypeAny> = {};
+  for (const [k, v] of Object.entries(props)) {
+    const zt = propToZod(v);
+    shape[k] = required.includes(k) ? zt : zt.optional();
+  }
+  return shape;
+}
 
 const PORT = parseInt(process.env.NEURON_BRIDGE_PORT ?? "7377", 10);
 
@@ -55,7 +92,7 @@ const mcp = new McpServer({
 
 // Browser tools (forwarded to extension via WebSocket)
 for (const tool of TOOLS) {
-  mcp.tool(tool.name, tool.description, tool.inputSchema, async (args) => {
+  mcp.tool(tool.name, tool.description, shapeFromSchema(tool.inputSchema as JsonProp), async (args) => {
     if (!extensionWs || extensionWs.readyState !== WebSocket.OPEN) {
       return {
         content: [{ type: "text", text: "Extension not connected. Open Chrome with the Neuron extension and enable developer mode." }],
@@ -80,9 +117,35 @@ for (const tool of TOOLS) {
 
 // Recipe tools (local, no extension needed)
 for (const tool of RECIPE_TOOLS) {
-  mcp.tool(tool.name, tool.description, tool.inputSchema, async (args) => {
+  mcp.tool(tool.name, tool.description, shapeFromSchema(tool.inputSchema as JsonProp), async (args) => {
     try {
       const result = await handleRecipeTool(tool.name, args as Record<string, unknown>);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      };
+    }
+  });
+}
+
+// Compound tools (bridge-side orchestration, forward to extension)
+for (const tool of COMPOUND_TOOLS) {
+  mcp.tool(tool.name, tool.description, shapeFromSchema(tool.inputSchema as JsonProp), async (args) => {
+    if (!extensionWs || extensionWs.readyState !== WebSocket.OPEN) {
+      return {
+        content: [{ type: "text", text: "Extension not connected. Open Chrome with the Neuron extension and enable developer mode." }],
+        isError: true,
+      };
+    }
+
+    try {
+      const result = await handleCompoundTool(
+        tool.name,
+        args as Record<string, unknown>,
+        { ws: extensionWs, pending },
+      );
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     } catch (err) {
       return {
@@ -98,7 +161,8 @@ for (const tool of RECIPE_TOOLS) {
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await mcp.connect(transport);
-  console.error(`[bridge] MCP server ready on stdio (${TOOLS.length} browser + ${RECIPE_TOOLS.length} recipe tools)`);
+  const total = TOOLS.length + COMPOUND_TOOLS.length + RECIPE_TOOLS.length;
+  console.error(`[bridge] MCP server ready on stdio (${total} tools: ${TOOLS.length} browser + ${COMPOUND_TOOLS.length} compound + ${RECIPE_TOOLS.length} recipe)`);
 }
 
 main().catch((err) => {
