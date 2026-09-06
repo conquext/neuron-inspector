@@ -18,6 +18,8 @@ The loop: check inbox → find new messages → draft reply → send to WhatsApp
 
 For each inbox in `{{inboxes}}`:
 
+**IMPORTANT: Scroll to latest.** Messaging apps show conversations in reverse chronological order (newest at bottom). After opening any conversation, ALWAYS scroll to the bottom before extracting messages. Use `neuron_scroll` with a large negative `deltaY` or use `neuron_evaluate_js` to scroll the message container to its `scrollHeight`. Without this, you'll read old messages and miss the most recent one.
+
 #### LinkedIn
 
 1. `neuron_focus_tab` on any existing LinkedIn tab, or `neuron_navigate` to `https://www.linkedin.com/messaging/`
@@ -26,7 +28,10 @@ For each inbox in `{{inboxes}}`:
 4. Look for unread indicators: elements with `.msg-conversation-card__unread-count` or bold text styling
 5. For each unread conversation:
    - `neuron_click` with `texts: ["<person name>"]` to open it
-   - `neuron_extract_data` to read the last few messages
+   - **Scroll to latest:** `neuron_scroll` with `selector: ".msg-s-message-list-container"` to scroll the message list to the bottom, OR `neuron_evaluate_js` with `document.querySelector('.msg-s-message-list-container').scrollTop = document.querySelector('.msg-s-message-list-container').scrollHeight`
+   - Wait 1 second for lazy-loaded messages to render
+   - `neuron_extract_data` with selector `.msg-s-event-listitem` to read messages
+   - The LAST items in the extracted list are the most recent — read from the bottom
    - Extract: sender name, their message text, timestamp
    - Check against `seen_messages` — skip if already processed
    - Check against `{{auto_skip}}` patterns — skip newsletters, automated messages
@@ -36,25 +41,55 @@ For each inbox in `{{inboxes}}`:
 
 1. `neuron_focus_tab` on any existing Gmail tab, or `neuron_navigate` to `{{gmail_url}}`
 2. Wait 3 seconds for load
-3. `neuron_extract_data` with selector `tr.zE` (unread rows in Gmail) or `.zA` (all rows, check for bold/unread class)
+3. `neuron_extract_data` with selector `tr.zE` (unread rows in Gmail) or `tr.zA` (all rows, unread have `zE` class)
 4. For each unread email:
    - `neuron_click` to open it
-   - `neuron_extract_data` to read: sender, subject, body
+   - **Scroll to latest:** `neuron_scroll` with `deltaY: 99999` to reach the bottom of the email thread (shows most recent reply)
+   - Wait 1 second
+   - `neuron_extract_data` to read: sender, subject, body of the latest message in the thread
    - Check against `seen_messages` and `{{auto_skip}}`
    - Add to `new_messages` queue
 
 #### X / Twitter DMs
 
-1. `neuron_navigate` to `https://x.com/messages`
-2. `neuron_extract_data` on the conversation list
-3. Look for unread indicators (bold text, unread badges)
-4. Open and read new messages
+1. `neuron_focus_tab` or `neuron_navigate` to `https://x.com/messages`
+2. Wait 3 seconds for load
+3. `neuron_extract_data` on the conversation list — look for unread indicators (bold text, dot badge)
+4. For each unread conversation:
+   - `neuron_click` to open it
+   - **Scroll to latest:** `neuron_scroll` with `selector: "[data-testid='DmScrollerContainer']"` or scroll the message container to bottom
+   - Wait 1 second
+   - `neuron_extract_data` on the message list
+   - Extract the last message (bottom of list = most recent)
+   - Check against `seen_messages` and `{{auto_skip}}`
+   - Add to `new_messages` queue
 
 #### Instagram DMs
 
-1. `neuron_navigate` to `https://www.instagram.com/direct/inbox/`
-2. `neuron_extract_data` on the conversation list
-3. Open and read new messages
+1. `neuron_focus_tab` or `neuron_navigate` to `https://www.instagram.com/direct/inbox/`
+2. Wait 3 seconds for load
+3. `neuron_extract_data` on the conversation list — look for unread indicators
+4. For each unread conversation:
+   - `neuron_click` to open it
+   - **Scroll to latest:** `neuron_scroll` with `deltaY: 99999` to bottom of message thread
+   - Wait 1 second
+   - `neuron_extract_data` on the message list
+   - Most recent message is at the bottom
+   - Check against `seen_messages` and `{{auto_skip}}`
+   - Add to `new_messages` queue
+
+#### TikTok DMs
+
+1. `neuron_focus_tab` or `neuron_navigate` to `https://www.tiktok.com/messages`
+2. Wait 3 seconds for load
+3. `neuron_extract_data` on the conversation list
+4. For each unread conversation:
+   - `neuron_click` to open it
+   - **Scroll to latest:** `neuron_scroll` with `deltaY: 99999` to bottom
+   - Wait 1 second
+   - `neuron_extract_data` on the message list
+   - Check against `seen_messages` and `{{auto_skip}}`
+   - Add to `new_messages` queue
 
 ### Phase 2: Draft replies
 
@@ -114,26 +149,42 @@ For each approved reply:
 
 3. **LinkedIn:**
    - `neuron_click` to open the conversation
-   - `neuron_type` with `.msg-form__contenteditable` selectors
+   - `neuron_scroll` to bottom of conversation so compose box is visible
+   - `neuron_type` with selectors `[".msg-form__contenteditable", "[contenteditable='true'][role='textbox']"]`
    - `neuron_press_key` with key `Enter`
-   - Wait 1 second, verify the message appeared in the thread
+   - Wait 2 seconds
+   - `neuron_extract_data` on the last message to verify your reply appeared
 
 4. **Gmail:**
    - Open the email thread
-   - `neuron_click` on "Reply" button
-   - Wait for the reply composer to load (find `div[aria-label="Message Body"]`)
+   - `neuron_scroll` to bottom of thread
+   - `neuron_click` on "Reply" button (texts: `["Reply"]`)
+   - Wait 2 seconds for the reply composer to load
+   - `neuron_find_elements` for `div[aria-label="Message Body"]` or `div[contenteditable='true']` — wait until found
    - `neuron_type` the reply
-   - `neuron_click` on Send button (`div[aria-label*="Send"]`)
+   - `neuron_click` on Send button (selectors: `["div[aria-label*='Send']", "button[aria-label*='Send']"]`)
+   - Wait 2 seconds, verify "Message sent" or the reply appears in the thread
 
 5. **X DMs:**
    - Open the conversation
-   - `neuron_type` into the message input
+   - `neuron_scroll` to bottom
+   - `neuron_type` into `div[data-testid="dmComposerTextInput"]` or `div[role="textbox"]`
    - `neuron_press_key` Enter
+   - Wait 1 second, verify
 
 6. **Instagram DMs:**
    - Open the conversation
-   - `neuron_type` into `textarea[placeholder*="Message"]`
+   - `neuron_scroll` to bottom
+   - `neuron_type` into `textarea[placeholder*="Message"]` or `div[contenteditable="true"][role="textbox"]`
    - `neuron_press_key` Enter
+   - Wait 1 second, verify
+
+7. **TikTok DMs:**
+   - Open the conversation
+   - `neuron_scroll` to bottom
+   - `neuron_type` into the message input (try `div[contenteditable="true"]`, `textarea`)
+   - `neuron_press_key` Enter
+   - Wait 1 second, verify
 
 ### Phase 5: Log and checkpoint
 

@@ -10,10 +10,10 @@ tags: [inbox, auto-reply, whatsapp-approval, linkedin, gmail, x, instagram, moni
 
 variables:
   inboxes:
-    prompt: "Which inboxes to watch (comma-separated)"
+    prompt: "Which inboxes to watch (comma-separated: linkedin, gmail, x, instagram, tiktok)"
     type: text
     required: true
-    example: "linkedin, gmail"
+    example: "linkedin, gmail, x, instagram, tiktok"
   check_interval_minutes:
     prompt: "How often to check for new messages (minutes)"
     type: number
