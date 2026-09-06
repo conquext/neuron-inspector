@@ -11,6 +11,10 @@
 import type { WebSocket } from "ws";
 import type { PendingCalls } from "./correlation.js";
 import type { ToolDef } from "./tools.js";
+import {
+  waitForElement, waitForText, waitForNavigation,
+  resilientClick, resilientType, healthCheck,
+} from "./resilience.js";
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -196,6 +200,85 @@ export const COMPOUND_TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "neuron_wait_for",
+    description:
+      "Wait for a condition to be true before proceeding. Polls at intervals until the condition is " +
+      "met or timeout. Use instead of fixed sleep() — waits for an element to appear, text to show " +
+      "up, or URL to change. Returns when the condition is met, throws on timeout.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tabId: { type: "number", description: "Chrome tab ID" },
+        condition: {
+          type: "string",
+          description: "What to wait for: 'element' (CSS selector appears), 'text' (text appears on page), 'url' (URL contains string)",
+        },
+        selectors: { type: "array", items: { type: "string" }, description: "CSS selectors to wait for (when condition='element')" },
+        text: { type: "string", description: "Text to wait for (when condition='text')" },
+        urlContains: { type: "string", description: "URL substring to wait for (when condition='url')" },
+        timeoutMs: { type: "number", description: "Max wait time in ms (default: 10000)" },
+        intervalMs: { type: "number", description: "Poll interval in ms (default: 500)" },
+      },
+      required: ["tabId", "condition"],
+    },
+  },
+  {
+    name: "neuron_smart_click",
+    description:
+      "Click with automatic retry and fallback chain. Tries CSS selectors first, then visible text, " +
+      "then aria-labels, scrolling to find the element between attempts. Optionally verifies the click " +
+      "had an effect (element appeared, disappeared, or changed). Use instead of neuron_click when " +
+      "reliability matters.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tabId: { type: "number", description: "Chrome tab ID" },
+        selectors: { type: "array", items: { type: "string" }, description: "CSS selectors to try (priority order)" },
+        texts: { type: "array", items: { type: "string" }, description: "Visible text labels to try" },
+        ariaLabels: { type: "array", items: { type: "string" }, description: "Aria labels to try" },
+        scrollToFind: { type: "boolean", description: "Scroll to find the element if not visible (default: true)" },
+        maxRetries: { type: "number", description: "Max attempts (default: 3)" },
+        verifySelector: { type: "string", description: "CSS selector to check after clicking (verification)" },
+        verifyChange: { type: "string", description: "Expected change: 'appears', 'disappears', 'changes'" },
+      },
+      required: ["tabId"],
+    },
+  },
+  {
+    name: "neuron_smart_type",
+    description:
+      "Type with retry, value verification, and optional Enter press. After typing, reads back " +
+      "the field to confirm the text was accepted by the framework. If verification fails, retries. " +
+      "Set pressEnter=true for send-on-enter fields (LinkedIn, X DMs). Use instead of neuron_type " +
+      "when the target is a framework-rendered input.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tabId: { type: "number", description: "Chrome tab ID" },
+        selectors: { type: "array", items: { type: "string" }, description: "CSS selectors for the input" },
+        value: { type: "string", description: "Text to type" },
+        verify: { type: "boolean", description: "Read back the field to confirm (default: true)" },
+        pressEnter: { type: "boolean", description: "Press Enter after typing — for send-on-enter fields (default: false)" },
+        maxRetries: { type: "number", description: "Max attempts (default: 3)" },
+      },
+      required: ["tabId", "selectors", "value"],
+    },
+  },
+  {
+    name: "neuron_health_check",
+    description:
+      "Check if a tab is healthy and ready for interaction. Verifies: extension connected, tab " +
+      "accessible, no login wall, no captcha, no rate limit block. Call this before starting any " +
+      "recipe or multi-step interaction. Returns ready=true if safe to proceed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tabId: { type: "number", description: "Chrome tab ID to check" },
+      },
+      required: ["tabId"],
+    },
+  },
+  {
     name: "neuron_vision_act",
     description:
       "Take a screenshot of the page and describe what's visible, then perform an action based on " +
@@ -322,6 +405,14 @@ export async function handleCompoundTool(
       return auditPage(args, ctx);
     case "neuron_monitor_action":
       return monitorAction(args, ctx);
+    case "neuron_wait_for":
+      return handleWaitFor(args, ctx);
+    case "neuron_smart_click":
+      return handleSmartClick(args, ctx);
+    case "neuron_smart_type":
+      return handleSmartType(args, ctx);
+    case "neuron_health_check":
+      return healthCheck(ctx, args.tabId as number);
     case "neuron_vision_act":
       return visionAct(args, ctx);
     case "neuron_approve_via_whatsapp":
@@ -739,6 +830,59 @@ async function monitorAction(
     diff,
     errors,
   };
+}
+
+// ── Resilience tool handlers ────────────────────────────────
+
+async function handleWaitFor(
+  args: Record<string, unknown>,
+  ctx: BridgeContext,
+): Promise<unknown> {
+  const tabId = args.tabId as number;
+  const condition = args.condition as string;
+  const opts = {
+    timeoutMs: (args.timeoutMs as number) ?? 10000,
+    intervalMs: (args.intervalMs as number) ?? 500,
+  };
+
+  switch (condition) {
+    case "element":
+      return waitForElement(ctx, tabId, args.selectors as string[], opts);
+    case "text":
+      return waitForText(ctx, tabId, args.text as string, opts);
+    case "url":
+      return waitForNavigation(ctx, tabId, { ...opts, urlContains: args.urlContains as string });
+    default:
+      throw new Error(`Unknown wait condition: ${condition}. Use 'element', 'text', or 'url'.`);
+  }
+}
+
+async function handleSmartClick(
+  args: Record<string, unknown>,
+  ctx: BridgeContext,
+): Promise<unknown> {
+  return resilientClick(ctx, args.tabId as number, {
+    selectors: args.selectors as string[] | undefined,
+    texts: args.texts as string[] | undefined,
+    ariaLabels: args.ariaLabels as string[] | undefined,
+    scrollToFind: (args.scrollToFind as boolean) ?? true,
+    maxRetries: (args.maxRetries as number) ?? 3,
+    verifySelector: args.verifySelector as string | undefined,
+    verifyChange: args.verifyChange as "appears" | "disappears" | "changes" | undefined,
+  });
+}
+
+async function handleSmartType(
+  args: Record<string, unknown>,
+  ctx: BridgeContext,
+): Promise<unknown> {
+  return resilientType(ctx, args.tabId as number, {
+    selectors: args.selectors as string[],
+    value: args.value as string,
+    verify: (args.verify as boolean) ?? true,
+    pressEnter: (args.pressEnter as boolean) ?? false,
+    maxRetries: (args.maxRetries as number) ?? 3,
+  });
 }
 
 // ── Vision-based action ─────────────────────────────────────
