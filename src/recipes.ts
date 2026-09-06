@@ -440,6 +440,23 @@ export function saveRules(rules: Partial<Rules>): { path: string } {
   return { path: rulesPath() };
 }
 
+/**
+ * System defaults — always injected into every recipe run.
+ * These encode "how a human behaves" so the agent doesn't need to be told each time.
+ */
+const SYSTEM_DEFAULTS = [
+  "Format messages the way a human texts — short paragraphs with blank lines between them, not walls of text.",
+  "Use \\n\\n between paragraphs in all messages (DMs, emails, comments). The typing tool renders line breaks correctly.",
+  "Match the length and energy of the conversation. If they wrote 2 sentences, reply with 2-3 sentences, not 5 paragraphs.",
+  "Never use em dashes (—), semicolons in casual messages, or the phrase 'I hope this message finds you well.'",
+  "No AI-sounding language: avoid 'I would be happy to', 'certainly', 'absolutely', 'I wanted to reach out', 'leverage', 'synergy.'",
+  "After typing into any field, verify the text appears correctly before proceeding. If the placeholder is still visible or text overlaps, clear and retype.",
+  "Always focus the tab before clicking, typing, or submitting. Background tabs render interactive elements at zero dimensions.",
+  "Scroll to the bottom of message threads before reading — newest messages are at the bottom on all messaging platforms.",
+  "After sending any message, wait 2 seconds and verify it appeared in the thread. If it didn't, the send failed.",
+  "When a selector fails, try visible text matching before reporting failure. Text labels are more stable than CSS classes.",
+];
+
 /** Format rules as a constraints block to inject into agent instructions. */
 export function formatRulesBlock(
   globalRules: Rules,
@@ -447,6 +464,11 @@ export function formatRulesBlock(
   platform?: string,
 ): string {
   const lines: string[] = [];
+
+  // System defaults — always present
+  lines.push("## System Defaults (always active)");
+  for (const r of SYSTEM_DEFAULTS) lines.push(`- ${r}`);
+  lines.push("");
 
   if (globalRules.never.length > 0) {
     lines.push("## HARD CONSTRAINTS (never violate)");
@@ -472,7 +494,6 @@ export function formatRulesBlock(
     lines.push("");
   }
 
-  return lines.length > 0
-    ? "---\n\n" + lines.join("\n") + "\n---\n\nThe rules above override ANY conflicting instruction in the recipe strategy. If a rule says never do X, do not do X even if the strategy says to.\n"
-    : "";
+  // System defaults are always present, so this always returns a non-empty block
+  return "---\n\n" + lines.join("\n") + "\n---\n\nThe rules above override ANY conflicting instruction in the recipe strategy. If a rule says never do X, do not do X even if the strategy says to.\n";
 }
