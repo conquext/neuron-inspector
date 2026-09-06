@@ -75,7 +75,54 @@ Search the web for outreach effectiveness data:
 
 From `learnings.md`, incorporate any patterns from past planning sessions.
 
-### Phase 5: Build the plan
+### Phase 5: Pre-mortem — how will execution fail?
+
+This is the most important phase. Before writing the plan, walk through every execution step and ask: **what will go wrong here?** Plans fail at the mechanical level, not the strategic level.
+
+**For every step the agent will perform, answer these questions:**
+
+1. **Page structure:** How does this page actually work?
+   - Is it a SPA that lazy-loads content? → The agent needs to scroll and wait before extracting.
+   - Does it use infinite scroll? → The agent needs to scroll to find the right content, not just read what's visible.
+   - Are the newest items at the top or the bottom? → Chat/messaging apps show newest at the bottom. Feeds show newest at the top. Getting this wrong means the agent reads stale data.
+   - Does the page require a click to expand content (modals, accordions, "Show more")? → Plan the click before the extract.
+
+2. **Tab focus:** Will the tab be in the foreground when the agent interacts with it?
+   - LinkedIn, Gmail, Facebook, and most modern apps render buttons and dropdowns at zero dimensions in background tabs.
+   - If the agent opens multiple tabs, only one is in the foreground. Every click/type/submit must be preceded by `neuron_focus_tab`.
+   - Any step involving send/submit/click MUST have "focus tab first" in the plan.
+
+3. **Framework compatibility:** How does the page handle input?
+   - Does it use React, Ember, Angular, or Vue? → Direct property assignment (`el.value = x`) is invisible to these frameworks. The agent must use `neuron_type` (which uses `execCommand` for contenteditable and native setters for inputs).
+   - Does the page use Enter-to-send or a Send button? → If Enter-to-send, plan `neuron_press_key("Enter")` after typing. If Send button, plan `neuron_click`.
+   - Does the page block JavaScript eval via CSP? → LinkedIn does. Facebook likely does. Don't plan steps that rely on `neuron_evaluate_js` for these platforms. Use `neuron_click`, `neuron_type`, and `neuron_press_key` instead.
+
+4. **Timing and loading:** What needs to load before the agent can act?
+   - Rich text editors (Gmail compose, LinkedIn message box) lazy-load. The agent must wait for the contenteditable element to appear before typing.
+   - Search results take time to render after submitting a query. Plan a wait.
+   - Page navigations need 2-3 seconds before extraction is reliable.
+   - After clicking a button (like Reply or Compose), plan a wait for the resulting UI to render.
+
+5. **Verification:** How will the agent know the action succeeded?
+   - "Click Send" is not verification. Verification is: extract the conversation after sending and confirm the message appears.
+   - "Type into the form" is not verification. Verification is: the form field shows the text AND the submit button is enabled.
+   - Plan a verification step after every critical action. If the verification fails, plan what to do (retry, skip, alert the user).
+
+6. **Edge cases that always happen:**
+   - What if there are no new messages? → Don't error, just report "no new messages" and exit.
+   - What if the user is logged out? → Detect the login page before trying to interact. Plan for `neuron_detect_blocker`.
+   - What if a captcha appears? → Stop immediately, alert the user. Never try to solve captchas.
+   - What if the page layout has changed since the selectors were written? → Fall back to `neuron_find_elements` with visible text matching. Text ("Send", "Reply", "Message") is more stable than CSS classes.
+   - What if there are too many results and the agent runs out of time? → Set a hard cap per run.
+
+**For every selector in the plan, answer:**
+- Is this a CSS class that the platform could rename? → Also plan a text-based fallback.
+- Is this a `data-testid` that's stable? → Better, but still verify it exists before clicking.
+- Can `neuron_find_elements` with `texts: ["Button Label"]` find this instead? → Usually more reliable.
+
+**Write the pre-mortem into the plan** as a "Known Failure Modes" section with mitigations for each. This isn't optional — a plan without failure modes is a wish list.
+
+### Phase 6: Build the plan
 
 Produce `{{output_path}}/{{date}}-{{goal_slug}}.md`:
 
@@ -151,6 +198,24 @@ Produce `{{output_path}}/{{date}}-{{goal_slug}}.md`:
 1. [Step-by-step, referencing specific browser tools]
 2. [Each step should map to a neuron_* tool call]
 3. [Include the warm-up / research phase per target]
+4. [Each step that involves clicking or typing MUST include neuron_focus_tab first]
+5. [Each step that reads messages/content MUST scroll to load the latest]
+6. [Each critical action MUST have a verification step after it]
+
+## Known Failure Modes
+
+For each failure mode, state: what fails, why, how the agent detects it, and what it does instead.
+
+| Failure | Detection | Mitigation |
+|---------|-----------|------------|
+| [e.g., Tab in background — send button at zero dimensions] | [neuron_find_elements returns empty or element has zero size] | [neuron_focus_tab before every interaction] |
+| [e.g., CSP blocks evaluateJS on this platform] | [evaluateJS returns CSP error] | [Use neuron_click + neuron_type + neuron_press_key instead] |
+| [e.g., Newest messages at bottom, agent reads top] | [Extracted messages have old timestamps] | [neuron_scroll to bottom before extracting] |
+| [e.g., Framework doesn't detect typed text, buttons stay disabled] | [Send button still disabled after typing] | [neuron_type uses execCommand internally; if still broken, try neuron_press_key Tab to trigger blur/change] |
+| [e.g., Logged out / session expired] | [neuron_detect_blocker finds login wall] | [Stop run, alert user, do not retry] |
+| [e.g., Captcha or rate limit] | [neuron_detect_blocker finds captcha] | [Stop entire session immediately] |
+| [e.g., Page layout changed, selectors broken] | [neuron_find_elements with CSS selector returns empty] | [Fall back to neuron_find_elements with texts: ["Button Label"]] |
+| [e.g., Content lazy-loads after scroll] | [First extraction returns fewer items than expected] | [Scroll + wait 1-2s + re-extract] |
 
 ## Success Metrics
 
