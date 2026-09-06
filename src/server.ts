@@ -9,6 +9,7 @@ import { COMPOUND_TOOLS, handleCompoundTool } from "./compound-tools.js";
 import { SCHEDULER_TOOLS, handleSchedulerTool, startScheduler } from "./scheduler.js";
 import { SESSION_TOOLS, handleSessionTool } from "./session-state.js";
 import { MONITOR_TOOLS, handleMonitorTool, startMonitor } from "./monitor.js";
+import { KILLSWITCH_TOOLS, handleKillswitchTool } from "./killswitch.js";
 import * as net from "node:net";
 
 // ── JSON-schema → Zod raw shape ──────────────────────────────
@@ -220,6 +221,9 @@ registerLocalTools(SCHEDULER_TOOLS, handleSchedulerTool);
 // Session state tools (local filesystem)
 registerLocalTools(SESSION_TOOLS, handleSessionTool);
 
+// Kill switch tools (local filesystem)
+registerLocalTools(KILLSWITCH_TOOLS, handleKillswitchTool);
+
 // Monitor tools (local filesystem + extension for checks)
 for (const tool of MONITOR_TOOLS) {
   mcp.tool(tool.name, tool.description, shapeFromSchema(tool.inputSchema as JsonProp), async (args) => {
@@ -258,12 +262,13 @@ async function main(): Promise<void> {
   await mcp.connect(transport);
 
   const total = TOOLS.length + COMPOUND_TOOLS.length + RECIPE_TOOLS.length +
-    SCHEDULER_TOOLS.length + SESSION_TOOLS.length + MONITOR_TOOLS.length;
+    SCHEDULER_TOOLS.length + SESSION_TOOLS.length + MONITOR_TOOLS.length + KILLSWITCH_TOOLS.length;
   console.error(
     `[bridge] MCP server ready on stdio [${mode}] (${total} tools: ` +
     `${TOOLS.length} browser + ${COMPOUND_TOOLS.length} compound + ` +
     `${RECIPE_TOOLS.length} recipe + ${SCHEDULER_TOOLS.length} scheduler + ` +
-    `${SESSION_TOOLS.length} session + ${MONITOR_TOOLS.length} monitor)`,
+    `${SESSION_TOOLS.length} session + ${MONITOR_TOOLS.length} monitor + ` +
+    `${KILLSWITCH_TOOLS.length} control)`,
   );
 
   // Background services only in primary mode
