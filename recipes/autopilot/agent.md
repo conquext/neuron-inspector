@@ -26,32 +26,58 @@ Load state → Scan sources → Classify events → Build task queue → Plan ea
 
 For each source in `{{watch_sources}}`:
 
-#### Gmail
-1. `neuron_focus_tab` + `neuron_navigate` to Gmail inbox
-2. `neuron_health_check` — logged in? No captcha?
-3. Scroll to load recent messages
-4. `neuron_extract_data` — pull unread emails: sender, subject, snippet, timestamp
-5. Filter out seen_events (by subject + sender + timestamp hash)
+**Sources can be anything** — a platform name (gmail, linkedin, x, instagram, tiktok) or a raw URL (a dashboard, a forum thread, a competitor's page, a Hacker News post, a Slack workspace in the browser). The scan engine handles both.
 
-#### LinkedIn
-1. `neuron_navigate` to linkedin.com/notifications/ and linkedin.com/messaging/
-2. **Notifications page:** extract notification items — who did what (commented, liked, connected, messaged, mentioned)
-3. **Messaging page:** scroll to bottom, extract unread conversations
-4. Filter out seen_events
+#### How to scan a source
 
-#### X / Twitter
-1. `neuron_navigate` to x.com/notifications
-2. Extract notification items — replies, mentions, likes, retweets, DMs
-3. Check x.com/messages for unread DMs
+**If the source is a known platform name**, use its notification/inbox URL:
 
-#### Instagram
-1. `neuron_navigate` to instagram.com (check notification bell count)
-2. Click notification bell, extract notification items — comments, likes, follows, DMs, mentions
-3. Check instagram.com/direct/inbox/ for unread DMs
+| Platform | Scan URLs | What to extract |
+|----------|-----------|----------------|
+| gmail | mail.google.com/mail/u/0/#inbox | Unread rows (bold/`tr.zE`), sender, subject, snippet |
+| linkedin | linkedin.com/notifications/ + linkedin.com/messaging/ | Notification items + unread conversations |
+| x | x.com/notifications + x.com/messages | Notification items (replies, mentions, likes, RTs) + unread DMs |
+| instagram | instagram.com (notification bell) + instagram.com/direct/inbox/ | Notification items + unread DMs |
+| tiktok | tiktok.com notifications + tiktok.com/messages | Notification items + unread DMs |
+| slack | app.slack.com (if open in browser) | Unread channel badges, DMs with red dots |
+| hackernews | news.ycombinator.com/threads?id=USERNAME | New replies to your comments |
+| github | github.com/notifications | PR reviews, issue mentions, CI failures |
 
-#### TikTok
-1. `neuron_navigate` to tiktok.com/messages and notification inbox
-2. Extract unread items
+**If the source is a raw URL**, treat it as a generic page to monitor:
+1. `neuron_navigate` to the URL
+2. `neuron_health_check` — accessible? Not blocked?
+3. Scroll to load content
+4. `neuron_extract_data` — pull all visible content
+5. Compare against the last snapshot (from `seen_events`) to find what's new
+6. Any new content = a new event to classify
+
+**Generic scan procedure for any source:**
+
+1. `neuron_focus_tab` + `neuron_navigate` to the source URL
+2. `neuron_health_check` — logged in? No captcha? Page accessible?
+3. Wait for content to load (`neuron_wait_for` element or 3 second fallback)
+4. Scroll to load lazy content and to find the latest items
+5. `neuron_extract_data` — pull structured content
+6. For messaging/notification pages: scroll to bottom first (newest at bottom for DMs, newest at top for notifications)
+7. Deduplicate against `seen_events` — skip anything already processed
+8. Each new item becomes a raw event for classification
+
+**For any page you haven't seen before:**
+- Don't assume the structure. Use `neuron_extract_data` without a selector first to see what the page contains.
+- If the page has clear notification indicators (red dots, bold text, "unread" badges, counters), extract those specifically.
+- If the page is a feed (posts, comments, threads), extract the top N items and compare against last scan.
+- If the page is a dashboard (metrics, alerts, status), extract the current values and compare against last snapshot for changes.
+
+**Custom sources (dashboards, tools, internal apps):**
+
+The user can add any URL as a source. Example standing order:
+```
+https://dashboard.myapp.com/alerts: if any alert is red/critical, send me the details on WhatsApp immediately
+https://news.ycombinator.com/item?id=12345: if new comments mention our product, draft a reply
+https://competitor.com/pricing: if the pricing page changes, screenshot and notify me
+```
+
+These work because the scan procedure is generic: navigate → extract → compare → classify changes.
 
 ### Phase 2: Classify each event
 
@@ -59,13 +85,15 @@ For every new event found, classify it into:
 
 | Category | Urgency | Examples |
 |----------|---------|---------|
-| **needs_reply** | 3-5 | Direct message, email asking a question, comment with a question |
-| **needs_action** | 2-4 | Connection request, follow request, mention that should be acknowledged |
-| **opportunity** | 3-5 | Someone asking about our product, potential lead, partnership inquiry |
-| **engagement** | 1-2 | Like our post, comment on our post (positive), share/repost |
-| **informational** | 1 | Newsletter, notification digest, system notification |
+| **needs_reply** | 3-5 | Direct message, email with a question, comment with a question, HN reply asking for details |
+| **needs_action** | 2-4 | Connection request, follow request, mention to acknowledge, PR review requested, CI failure |
+| **opportunity** | 3-5 | Someone asking about our product, potential lead, partnership inquiry, job posting match |
+| **alert** | 4-5 | Dashboard alert, monitoring threshold crossed, price drop, competitor page changed, service down |
+| **engagement** | 1-2 | Like our post, comment (positive), share/repost, star on GitHub |
+| **discussion** | 2-3 | New reply in a thread we're following, forum post mentioning us, Reddit/HN discussion about our space |
+| **informational** | 1 | Newsletter, notification digest, system notification, weekly summary |
 | **spam** | 0 | Mass outreach, bot messages, obvious templates |
-| **requires_human** | 5 | Complaint, negative feedback, legal/financial, anything ambiguous |
+| **requires_human** | 5 | Complaint, negative feedback, legal/financial, anything ambiguous, large purchase decisions |
 
 **Classification inputs:**
 - Sender: who are they? (check their profile if needed via `neuron_research_page`)
@@ -77,11 +105,11 @@ For every new event found, classify it into:
 **Classification output per event:**
 ```yaml
 event_id: "<hash>"
-source: gmail|linkedin|x|instagram|tiktok
-type: message|notification|comment|mention|follow|connection_request|email
-sender: "<name>"
+source: "<platform name or URL>"
+type: message|notification|comment|mention|follow|connection_request|email|alert|thread_reply|page_change|custom
+sender: "<name or source identifier>"
 content_preview: "<first 200 chars>"
-category: needs_reply|needs_action|opportunity|engagement|informational|spam|requires_human
+category: needs_reply|needs_action|opportunity|alert|engagement|discussion|informational|spam|requires_human
 urgency: 1-5
 planned_action: "<what to do>"
 standing_order_match: "<which standing order applies, if any>"
@@ -140,17 +168,35 @@ Based on the task category:
 3. Include relevant product/service context from `{{identity}}`
 4. Always requires approval — opportunities are high-stakes
 
-**engagement (likes, positive comments):**
+**alert (dashboard, monitoring, changes):**
+1. Capture the current state: `neuron_screenshot` + `neuron_extract_data`
+2. Send to WhatsApp immediately via `neuron_approve_via_whatsapp` with the full context
+3. If the standing order specifies an action (restart, acknowledge, escalate) → execute it
+4. If not → just notify, don't act. Alerts are observation, not action, unless specified.
+
+**engagement (likes, positive comments, stars):**
 1. Navigate to the comment/post
 2. Like the comment (if on our post)
 3. Reply if it's a question or deserves acknowledgment
 4. Quick replies only — "Thanks!" or a relevant one-liner
+
+**discussion (thread reply, forum mention, HN comment):**
+1. Navigate to the thread/post
+2. Read the full context (what was said before, what they're responding to)
+3. If it's about us/our product → draft a helpful, factual reply
+4. If it's a general discussion → engage only if we add value, skip otherwise
+5. Always requires approval — public discussions have high visibility
 
 **requires_human:**
 1. Don't act. Send the full context to WhatsApp with `neuron_approve_via_whatsapp`
 2. Wait for the human to respond with instructions
 3. If instructions provided → execute them
 4. If timeout → skip, add to next run's queue
+
+**Generic (any URL source):**
+1. The standing order for that URL defines the action
+2. If no standing order → notify on WhatsApp with a screenshot and summary of what changed
+3. Never take action on an unknown source without approval
 
 #### Step 2: Execute with pre-mortem
 

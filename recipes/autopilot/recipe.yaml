@@ -10,10 +10,11 @@ tags: [autopilot, autonomous, monitoring, classification, routing, multi-platfor
 
 variables:
   watch_sources:
-    prompt: "What to monitor (comma-separated: gmail, linkedin, x, instagram, tiktok)"
+    prompt: "What to monitor — platform names or URLs, comma-separated (gmail, linkedin, x, instagram, tiktok, github, slack, or any URL like https://dashboard.myapp.com/alerts)"
     type: text
     required: true
     default: "gmail, linkedin"
+    example: "gmail, linkedin, x, instagram, https://news.ycombinator.com/threads?id=rasheed, https://github.com/notifications"
   approval_phone:
     prompt: "Your WhatsApp number for approvals (E.164)"
     type: text
@@ -36,6 +37,9 @@ variables:
       Instagram comments on our posts: like the comment, reply if it's a question
       Gmail from unknown senders pitching services: archive, don't reply
       LinkedIn messages asking about our product: reply with a brief description and link
+      https://dashboard.myapp.com/alerts: if any alert is critical, send details to WhatsApp immediately
+      HackerNews replies mentioning our product: draft a helpful reply
+      GitHub PR review requests: notify me on WhatsApp with the PR title and link
   check_interval_minutes:
     prompt: "How often to check (minutes)"
     type: number
