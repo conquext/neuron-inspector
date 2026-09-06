@@ -1,8 +1,8 @@
 # neuron-inspector
 
-**91 browser tools for AI agents.** Your AI can't see your browser. This fixes that.
+**98 browser tools for AI agents.** Your AI can't see your browser. This fixes that.
 
-Inspect DOM, automate clicks, run JavaScript, search network traffic, audit security, check accessibility, scan SEO, mock APIs, extract structured data, record demos, schedule workflows, save session state — all from Claude Code, Cursor, Windsurf, or any MCP client.
+Inspect DOM, automate clicks, run JavaScript, search network traffic, audit security, check accessibility, scan SEO, mock APIs, extract structured data, record demos, schedule workflows, save session state — all from Claude Code, Cursor, Windsurf, or any MCP client. Built-in resilience layer with smart retry and verification for production-grade automation.
 
 No API keys. No cloud. Runs on localhost.
 
@@ -125,7 +125,7 @@ The agent calls `neuron_perf_snapshot` and gets back Core Web Vitals, render-blo
 
 ---
 
-## All 91 tools
+## All 98 tools
 
 ### Inspect & Debug
 | Tool | What it does |
