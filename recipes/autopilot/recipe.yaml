@@ -1,0 +1,92 @@
+name: Autopilot
+version: 1.0.0
+description: >
+  The autonomous operations agent. Monitors your inboxes and notifications,
+  classifies each event, decides what action to take, plans the approach,
+  executes it, and verifies the result — all with WhatsApp approval gates.
+  Runs on a schedule. You approve from your phone while living your life.
+author: neuron
+tags: [autopilot, autonomous, monitoring, classification, routing, multi-platform]
+
+variables:
+  watch_sources:
+    prompt: "What to monitor (comma-separated: gmail, linkedin, x, instagram, tiktok)"
+    type: text
+    required: true
+    default: "gmail, linkedin"
+  approval_phone:
+    prompt: "Your WhatsApp number for approvals (E.164)"
+    type: text
+    required: true
+  neuron_api_key:
+    prompt: "Neuron bot API key (nrn_...)"
+    type: text
+    required: true
+  identity:
+    prompt: "Who are you? (name, role, companies — used for context in replies and actions)"
+    type: text
+    required: true
+    example: "Rasheed Alabi, founder of LetsChop (meal ordering), Neuron (AI chatbots), DelivaHere (delivery API). Based in Lagos."
+  standing_orders:
+    prompt: "Standing instructions for common situations (one per line)"
+    type: text
+    default: ""
+    example: |
+      LinkedIn connection requests from recruiters: accept and reply "Thanks for connecting"
+      Instagram comments on our posts: like the comment, reply if it's a question
+      Gmail from unknown senders pitching services: archive, don't reply
+      LinkedIn messages asking about our product: reply with a brief description and link
+  check_interval_minutes:
+    prompt: "How often to check (minutes)"
+    type: number
+    default: 15
+  urgency_threshold:
+    prompt: "Minimum urgency to act on (1=everything, 3=only important, 5=only critical)"
+    type: number
+    default: 2
+  output_path:
+    prompt: "Where to save the operations log"
+    type: path
+    default: "./autopilot"
+
+tools:
+  required:
+    - neuron_navigate
+    - neuron_focus_tab
+    - neuron_extract_data
+    - neuron_find_elements
+    - neuron_type
+    - neuron_press_key
+    - neuron_click
+    - neuron_scroll
+    - neuron_screenshot
+    - neuron_list_tabs
+    - neuron_get_errors
+    - neuron_detect_blocker
+    - neuron_research_page
+    - neuron_smart_click
+    - neuron_smart_type
+    - neuron_wait_for
+    - neuron_health_check
+    - neuron_approve_via_whatsapp
+    - neuron_session_save
+    - neuron_session_load
+    - neuron_session_checkpoint
+    - neuron_recipe_log
+    - neuron_rules_get
+
+pipes:
+  outputs:
+    ops_log:
+      format: yaml
+      path: "{{output_path}}/ops-log.yaml"
+      description: "Log of all events detected, classifications, actions taken, and outcomes"
+    task_queue:
+      format: yaml
+      path: "{{output_path}}/task-queue.yaml"
+      description: "Current task queue — pending, in-progress, and completed tasks"
+
+limits:
+  max_tabs: 5
+  max_duration_minutes: 20
+  require_human_approval: true
