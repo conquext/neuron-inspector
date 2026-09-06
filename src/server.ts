@@ -85,6 +85,39 @@ async function startBridge(): Promise<void> {
             pending.onResponse(msg);
             return;
           }
+
+          // Handle tool calls FROM the extension (for killswitch/local tools)
+          if (msg.type === "TOOL_CALL" && msg.requestId && msg.payload?.name) {
+            const toolName = msg.payload.name as string;
+            const toolArgs = (msg.payload.args as Record<string, unknown>) ?? {};
+
+            // Check if it's a local tool (killswitch, recipe, scheduler, session, monitor)
+            const localHandlers: Record<string, (n: string, a: Record<string, unknown>) => Promise<unknown>> = {
+              neuron_stop: handleKillswitchTool,
+              neuron_status: handleKillswitchTool,
+              neuron_pause_all: handleKillswitchTool,
+              neuron_resume_all: handleKillswitchTool,
+              neuron_recipe_list: handleRecipeTool,
+              neuron_recipe_get: handleRecipeTool,
+              neuron_rules_get: handleRecipeTool,
+              neuron_schedule_list: handleSchedulerTool,
+              neuron_session_list: handleSessionTool,
+              neuron_monitor_list: (n, a) => handleMonitorTool(n, a),
+              neuron_monitor_alerts: (n, a) => handleMonitorTool(n, a),
+            };
+
+            const handler = localHandlers[toolName];
+            if (handler) {
+              handler(toolName, toolArgs)
+                .then((result) => {
+                  ws.send(JSON.stringify({ type: "response", requestId: msg.requestId, payload: result }));
+                })
+                .catch((err) => {
+                  ws.send(JSON.stringify({ type: "response", requestId: msg.requestId, error: (err as Error).message }));
+                });
+              return;
+            }
+          }
         } catch {
           // ignore unparseable messages
         }
