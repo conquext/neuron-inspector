@@ -9,6 +9,7 @@ import { COMPOUND_TOOLS, handleCompoundTool } from "./compound-tools.js";
 import { SCHEDULER_TOOLS, handleSchedulerTool, startScheduler } from "./scheduler.js";
 import { SESSION_TOOLS, handleSessionTool } from "./session-state.js";
 import { MONITOR_TOOLS, handleMonitorTool, startMonitor } from "./monitor.js";
+import * as net from "node:net";
 
 // ── JSON-schema → Zod raw shape ──────────────────────────────
 type JsonProp = { type?: string; description?: string; enum?: string[]; items?: JsonProp; properties?: Record<string, JsonProp>; required?: string[] };
@@ -49,44 +50,102 @@ const PORT = parseInt(process.env.NEURON_BRIDGE_PORT ?? "7377", 10);
 
 let extensionWs: WebSocket | null = null;
 const pending = new PendingCalls();
+let mode: "primary" | "proxy" = "primary";
 
-// ── WebSocket server (extension connects here) ──────────────
+// ── Port check: is another bridge already running? ──────────
 
-const wss = new WebSocketServer({ host: "127.0.0.1", port: PORT });
+function isPortTaken(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const s = net.createServer();
+    s.once("error", () => resolve(true));
+    s.once("listening", () => { s.close(); resolve(false); });
+    s.listen(port, "127.0.0.1");
+  });
+}
 
-wss.on("connection", (ws) => {
-  console.error(`[bridge] Extension connected`);
-  extensionWs = ws;
+// ── Start as primary (WebSocket server) or proxy (WS client) ─
 
-  ws.on("message", (data) => {
-    try {
-      const msg = JSON.parse(data.toString());
-      if (msg.type === "response" && msg.requestId) {
-        pending.onResponse(msg);
-        return;
-      }
-    } catch {
-      // ignore unparseable messages
+async function startBridge(): Promise<void> {
+  const taken = await isPortTaken(PORT);
+
+  if (!taken) {
+    // Primary mode — start WebSocket server, extension connects here
+    mode = "primary";
+    const wss = new WebSocketServer({ host: "127.0.0.1", port: PORT });
+
+    wss.on("connection", (ws) => {
+      console.error(`[bridge] Extension connected`);
+      extensionWs = ws;
+
+      ws.on("message", (data) => {
+        try {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "response" && msg.requestId) {
+            pending.onResponse(msg);
+            return;
+          }
+        } catch {
+          // ignore unparseable messages
+        }
+      });
+
+      ws.on("close", () => {
+        console.error(`[bridge] Extension disconnected`);
+        if (extensionWs === ws) extensionWs = null;
+        pending.clear();
+      });
+    });
+
+    console.error(`[bridge] Primary mode — WebSocket server on 127.0.0.1:${PORT}`);
+  } else {
+    // Proxy mode — another bridge owns the port. Connect as a WS client
+    // and relay tool calls through it.
+    mode = "proxy";
+    console.error(`[bridge] Port ${PORT} in use — switching to proxy mode`);
+
+    function connectProxy(): void {
+      const ws = new WebSocket(`ws://127.0.0.1:${PORT}`);
+
+      ws.on("open", () => {
+        console.error(`[bridge] Proxy connected to primary bridge`);
+        extensionWs = ws;
+      });
+
+      ws.on("message", (data) => {
+        try {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "response" && msg.requestId) {
+            pending.onResponse(msg);
+          }
+        } catch {
+          // ignore
+        }
+      });
+
+      ws.on("close", () => {
+        console.error(`[bridge] Proxy disconnected from primary — reconnecting in 3s`);
+        extensionWs = null;
+        pending.clear();
+        setTimeout(connectProxy, 3000);
+      });
+
+      ws.on("error", () => {
+        // onclose will handle reconnect
+      });
     }
-  });
 
-  ws.on("close", () => {
-    console.error(`[bridge] Extension disconnected`);
-    if (extensionWs === ws) extensionWs = null;
-    pending.clear();
-  });
-});
-
-console.error(`[bridge] WebSocket server listening on 127.0.0.1:${PORT}`);
+    connectProxy();
+  }
+}
 
 // ── MCP server (Claude Code / Cursor connects via stdio) ────
 
 const mcp = new McpServer({
   name: "neuron-inspector",
-  version: "0.4.0",
+  version: "0.5.1",
 });
 
-// ── Helper: register a group of ToolDef[] with a handler ────
+// ── Helper: register tool groups ────────────────────────────
 
 type ToolHandler = (name: string, args: Record<string, unknown>) => Promise<unknown>;
 
@@ -165,7 +224,6 @@ registerLocalTools(SESSION_TOOLS, handleSessionTool);
 for (const tool of MONITOR_TOOLS) {
   mcp.tool(tool.name, tool.description, shapeFromSchema(tool.inputSchema as JsonProp), async (args) => {
     try {
-      // Build a check function that uses the extension to visit pages
       const checkFn = async (url: string, selector?: string): Promise<{ text: string; items?: unknown[] }> => {
         if (!extensionWs || extensionWs.readyState !== WebSocket.OPEN) {
           throw new Error("Extension not connected");
@@ -174,13 +232,11 @@ for (const tool of MONITOR_TOOLS) {
         const tabId = tab?.tabId;
         if (!tabId) throw new Error("Failed to open tab");
         await new Promise((r) => setTimeout(r, 3000));
-        // Scroll to load content
         await pending.call(extensionWs, "scrollPage", { tabId, deltaY: 600, smooth: true });
         await new Promise((r) => setTimeout(r, 500));
         const extractArgs: Record<string, unknown> = { tabId };
         if (selector) extractArgs.selector = selector;
         const data = await pending.call(extensionWs, "extractData", extractArgs);
-        // Close tab
         try { await pending.call(extensionWs, "evaluateJS", { tabId, expression: "window.close()" }); } catch { /* ok */ }
         return { text: JSON.stringify(data), items: Array.isArray(data) ? data : undefined };
       };
@@ -196,36 +252,40 @@ for (const tool of MONITOR_TOOLS) {
 // ── Start ────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
+  await startBridge();
+
   const transport = new StdioServerTransport();
   await mcp.connect(transport);
 
   const total = TOOLS.length + COMPOUND_TOOLS.length + RECIPE_TOOLS.length +
     SCHEDULER_TOOLS.length + SESSION_TOOLS.length + MONITOR_TOOLS.length;
   console.error(
-    `[bridge] MCP server ready on stdio (${total} tools: ` +
+    `[bridge] MCP server ready on stdio [${mode}] (${total} tools: ` +
     `${TOOLS.length} browser + ${COMPOUND_TOOLS.length} compound + ` +
     `${RECIPE_TOOLS.length} recipe + ${SCHEDULER_TOOLS.length} scheduler + ` +
     `${SESSION_TOOLS.length} session + ${MONITOR_TOOLS.length} monitor)`,
   );
 
-  // Start background services
-  startScheduler();
-  startMonitor(async (url, selector) => {
-    if (!extensionWs || extensionWs.readyState !== WebSocket.OPEN) {
-      throw new Error("Extension not connected — monitor check skipped");
-    }
-    const tab = (await pending.call(extensionWs, "openTab", { url })) as { tabId?: number };
-    const tabId = tab?.tabId;
-    if (!tabId) throw new Error("Failed to open tab for monitor");
-    await new Promise((r) => setTimeout(r, 3000));
-    await pending.call(extensionWs, "scrollPage", { tabId, deltaY: 600, smooth: true });
-    await new Promise((r) => setTimeout(r, 500));
-    const args: Record<string, unknown> = { tabId };
-    if (selector) args.selector = selector;
-    const data = await pending.call(extensionWs, "extractData", args);
-    try { await pending.call(extensionWs, "evaluateJS", { tabId, expression: "window.close()" }); } catch { /* ok */ }
-    return { text: JSON.stringify(data), items: Array.isArray(data) ? data : undefined };
-  });
+  // Background services only in primary mode
+  if (mode === "primary") {
+    startScheduler();
+    startMonitor(async (url, selector) => {
+      if (!extensionWs || extensionWs.readyState !== WebSocket.OPEN) {
+        throw new Error("Extension not connected — monitor check skipped");
+      }
+      const tab = (await pending.call(extensionWs, "openTab", { url })) as { tabId?: number };
+      const tabId = tab?.tabId;
+      if (!tabId) throw new Error("Failed to open tab for monitor");
+      await new Promise((r) => setTimeout(r, 3000));
+      await pending.call(extensionWs, "scrollPage", { tabId, deltaY: 600, smooth: true });
+      await new Promise((r) => setTimeout(r, 500));
+      const args: Record<string, unknown> = { tabId };
+      if (selector) args.selector = selector;
+      const data = await pending.call(extensionWs, "extractData", args);
+      try { await pending.call(extensionWs, "evaluateJS", { tabId, expression: "window.close()" }); } catch { /* ok */ }
+      return { text: JSON.stringify(data), items: Array.isArray(data) ? data : undefined };
+    });
+  }
 }
 
 main().catch((err) => {
